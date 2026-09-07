@@ -55,6 +55,14 @@ Set-Content -LiteralPath $shim -Encoding ascii -Value @(
 )
 Write-Host "  tpv: $shim -> $(Join-Path $repo 'tpv\tpv.py')"
 
+# slides, the deck builder, the same way.
+$shim = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\slides.cmd'
+Set-Content -LiteralPath $shim -Encoding ascii -Value @(
+    '@echo off'
+    "python `"$(Join-Path $repo 'slides\slides.py')`" %*"
+)
+Write-Host "  slides: $shim -> $(Join-Path $repo 'slides\slides.py')"
+
 # WezTerm reads ~\.wezterm.lua in preference to ~\.config\wezterm, so a
 # leftover there would silently win over the repo.
 $stray = Join-Path $HOME '.wezterm.lua'
