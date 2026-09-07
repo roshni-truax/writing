@@ -51,9 +51,9 @@
 #let page-width = 254mm
 #let page-height = page-width * cfg.aspect
 
-// The footer is one line of the grid, set per slide: the progress bar when
-// the deck has one, otherwise the slide number alone, faded, at the right.
-// The first slide carries no number.
+// The footer is one line of the grid, set per slide by slides.py: the
+// slide number, counted from `start`, at the right end of the progress bar
+// when the deck has one. Slides outside start..end carry nothing.
 #let footer-line = state("footer", none)
 
 #set page(
@@ -63,14 +63,7 @@
   margin: (x: (page-width - text-width) / 2, top: 1.6cm, bottom: 1.4cm),
   footer: context {
     let line = footer-line.get()
-    if line != none {
-      ascii((line,))
-    } else {
-      let n = counter(page).get().first()
-      if n > 1 {
-        align(right, text(size: 0.7em, fill: theme.faint, str(n)))
-      }
-    }
+    if line != none { ascii((line,)) }
   },
 )
 
@@ -80,8 +73,10 @@
 #set text(font: cfg.font, size: cfg.size, weight: 200, fill: theme.fg)
 #show strong: set text(weight: 800)
 #set par(leading: 0.65em, spacing: 1.3em)
-#set list(marker: text(fill: theme.dim, "-"), indent: 0pt, body-indent: ch)
-#set enum(indent: 0pt, body-indent: ch)
+// Lists step in two characters, like a quotation. A bullet, then a ring
+// for the level inside it; the bullets are dim so the words come first.
+#set list(marker: (text(fill: theme.dim, "•"), text(fill: theme.dim, "◦")), indent: 2 * ch, body-indent: ch)
+#set enum(indent: 2 * ch, body-indent: ch)
 
 // A slide is a page. Content sits at the top unless the `===` before the
 // slide says centre or bottom. `footer` is the footer line's segments, or

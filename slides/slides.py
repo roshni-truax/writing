@@ -12,9 +12,10 @@ with one, for its first slide):
 
   === centre       content centred on the page instead of at the top
   === bottom       content at the foot of the page
-  === start        the first slide the progress bar counts
-  === end          the first slide it no longer counts
-  === chapter      a chapter begins: a one-character break in the bar
+  === start        the first slide the progress bar counts, and the
+                   first of its sections
+  === section      a section begins: a one-character break in the bar
+  === end          the first slide the bar no longer counts
 
   slides deck.md
   slides deck.md -o out.pdf
@@ -26,7 +27,7 @@ Frontmatter, all optional:
   slides: true      what tells the editor to export with this, not pandoc
   theme: dark       or light
   progress: true    a bar in the footer showing how far through the deck
-                    this slide is; `start`, `end` and `chapter` above shape it
+                    this slide is; `start`, `section` and `end` above shape it
   aspect: 16:9      the page's shape; 16:10 or 4:3 for another screen
   size: 13pt
   columns: 72
@@ -38,6 +39,11 @@ subtitle, paragraphs, `-` and `1.` lists (nested by indenting), `>` quotes,
 `|` tables, `---` for a rule, `![alt](path)` on its own line, and inline
 **bold**, *emphasis*, `code`, [links](url). A fenced block is drawn
 verbatim, unless its language names a plugin.
+
+Anything between `::: centre` and `:::` on lines of their own is centred
+across the page (`::: right` for the other side). Text centres as text;
+something drawn in characters moves as one block, by whole columns, so it
+keeps its shape and its place on the grid.
 
 Plugins live in plugins/ beside this file; the file's name is the fence
 language. One exposes
@@ -61,7 +67,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TONES = ("fg", "dim", "faint")
 DEFAULTS = {"theme": "dark", "size": "13pt", "columns": "72", "font": "JetBrainsMono NFM",
             "aspect": "16:9", "progress": "false"}
-WORDS = {"centre", "center", "bottom", "start", "end", "chapter"}
+WORDS = {"centre", "center", "bottom", "start", "section", "end"}
 
 
 class DeckError(Exception):
@@ -138,7 +144,12 @@ def inline(text):
     return " + ".join(parts) or 'text("")'
 
 
-def ascii_expr(lines):
+def ascii_expr(lines, width=None, halign="left"):
+    """`width` and `halign` shift the block as one, by whole columns."""
+    if halign != "left" and width:
+        widest = max(sum(len(t) for t, _ in segs) for segs in lines)
+        pad = max(0, width - widest) // (2 if halign == "centre" else 1)
+        lines = [[(" " * pad, "fg")] + segs for segs in lines]
     rows = []
     for segs in lines:
         rows.append("(" + ", ".join(f"({q(t)}, {q(tone)})" for t, tone in segs) + ",)")
@@ -152,6 +163,9 @@ HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*$")
 LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 IMAGE = re.compile(r"^!\[([^\]]*)\]\(([^)\s]+)\)(?:\{width=([^}]+)\})?\s*$")
 QUOTE = re.compile(r"^>\s?(.*)$")
+DIV_OPEN = re.compile(r"^:{3,}\s*(\S+)\s*$")
+DIV_CLOSE = re.compile(r"^:{3,}\s*$")
+ALIGNS = {"centre": "centre", "center": "centre", "right": "right", "left": "left"}
 RULE = re.compile(r"^-{3,}\s*$")
 TABLE_ROW = re.compile(r"^\|.*\|\s*$")
 TABLE_SEP = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
@@ -247,20 +261,44 @@ def parse_list(items):
     return expr
 
 
-def parse_slide(lines, plugins, width, number):
-    """One slide's lines as a list of typst content expressions."""
+def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
+    """One slide's lines as a list of typst content expressions. `halign`
+    is set inside a `:::` wrapper: text is aligned by typst, drawings by
+    whole columns here."""
     parts = []
-    has_title = False
     i = 0
     paragraph = []
+    aligned = {"centre": "center", "right": "right"}.get(halign)
+
+    def add(expr):
+        parts.append(f"align({aligned}, {expr})" if aligned else expr)
 
     def flush():
         if paragraph:
-            parts.append(f"par({inline(' '.join(paragraph))})")
+            add(f"par({inline(' '.join(paragraph))})")
             paragraph.clear()
 
     while i < len(lines):
         line = lines[i]
+        div = DIV_OPEN.match(line)
+        if div:
+            flush()
+            word = div.group(1).lower()
+            if word not in ALIGNS:
+                raise DeckError(f"slide {number}: ::: takes centre, right or left, not {word!r}")
+            inner = []
+            i += 1
+            while i < len(lines) and not DIV_CLOSE.match(lines[i]):
+                inner.append(lines[i])
+                i += 1
+            if i == len(lines):
+                raise DeckError(f"slide {number}: a ::: {word} never closes")
+            i += 1
+            parts.extend(parse_slide(inner, plugins, width, number, ALIGNS[word], has_title))
+            has_title = has_title or any(HEADING.match(l) and HEADING.match(l).group(1) == "#"
+                                         for l in inner)
+            continue
+
         fence = FENCE.match(line)
         if fence:
             flush()
@@ -285,7 +323,7 @@ def parse_slide(lines, plugins, width, number):
                     raise DeckError(f"{where}: {type(e).__name__}: {e}") from e
             else:
                 drawn = body
-            parts.append(ascii_expr(normalise_lines(drawn, width, where)))
+            parts.append(ascii_expr(normalise_lines(drawn, width, where), width, halign))
             continue
 
         if RULE.match(line):
@@ -300,7 +338,7 @@ def parse_slide(lines, plugins, width, number):
             while i < len(lines) and TABLE_ROW.match(lines[i]):
                 rows.append(lines[i])
                 i += 1
-            parts.append(ascii_expr(table(rows, width)))
+            parts.append(ascii_expr(table(rows, width), width, halign))
             continue
 
         heading = HEADING.match(line)
@@ -308,10 +346,10 @@ def parse_slide(lines, plugins, width, number):
             flush()
             level, text = heading.groups()
             if len(level) == 1 and not has_title:
-                parts.append(f"title({inline(text)})")
+                add(f"title({inline(text)})")
                 has_title = True
             else:
-                parts.append(f"subtitle({inline(text)})")
+                add(f"subtitle({inline(text)})")
             i += 1
             continue
 
@@ -319,7 +357,7 @@ def parse_slide(lines, plugins, width, number):
         if image:
             flush()
             alt, src, w = image.groups()
-            parts.append(f"image({q(src)}, width: {w or '100%'}, alt: {q(alt)})")
+            add(f"image({q(src)}, width: {w or '100%'}, alt: {q(alt)})")
             i += 1
             continue
 
@@ -335,7 +373,7 @@ def parse_slide(lines, plugins, width, number):
                         and len(lines[i]) - len(lines[i].lstrip()) > len(indent):
                     items[-1][2] += " " + lines[i].strip()
                     i += 1
-            parts.append(parse_list(items))
+            add(parse_list(items))
             continue
 
         if QUOTE.match(line):
@@ -344,7 +382,7 @@ def parse_slide(lines, plugins, width, number):
             while i < len(lines) and (m := QUOTE.match(lines[i])):
                 quoted.append(m.group(1))
                 i += 1
-            parts.append(f"quote({inline(' '.join(q_ for q_ in quoted if q_.strip()))})")
+            add(f"quote({inline(' '.join(q_ for q_ in quoted if q_.strip()))})")
             continue
 
         if not line.strip():
@@ -357,38 +395,44 @@ def parse_slide(lines, plugins, width, number):
     return parts
 
 
-def progress_bars(slides, width):
-    """The footer line for each slide, or None where the bar is not shown.
+def footers(slides, width, progress):
+    """The footer line for each slide, or None where there is none.
 
-    The bar counts the slides from `start` up to `end`, all of them when
-    neither is given, and fills to the current one. A `chapter` boundary is
-    a one-character gap. The slide number sits at the right end."""
+    Slides are numbered from `start` up to `end`, all of them when neither
+    is given, so the title slide before a `start` carries nothing. With
+    `progress` on, the number sits at the right end of a bar that fills to
+    the current slide, with a one-character gap at each `section`; `start`
+    opens the first section by itself."""
     first = next((i for i, (w, _) in enumerate(slides) if "start" in w), 0)
     last = next((i for i, (w, _) in enumerate(slides) if "end" in w and i > first), len(slides))
     tracked = list(range(first, last))
-    breaks = [i for i in tracked[1:] if "chapter" in slides[i][0]]
-    number_w = len(str(len(slides))) + 2
-    bar_w = width - number_w - len(breaks)
-    if bar_w < len(tracked):
-        raise DeckError("too many slides for the progress bar; raise `columns`")
-    # cell bounds per tracked slide, spread evenly across the bar
-    bounds = [(round(k * bar_w / len(tracked)), round((k + 1) * bar_w / len(tracked)))
-              for k in range(len(tracked))]
+    number_w = len(str(len(tracked))) + 2
+    if progress:
+        breaks = [i for i in tracked[1:] if "section" in slides[i][0]]
+        bar_w = width - number_w - len(breaks)
+        if bar_w < len(tracked):
+            raise DeckError("too many slides for the progress bar; raise `columns`")
+        # cell bounds per tracked slide, spread evenly across the bar
+        bounds = [(round(k * bar_w / len(tracked)), round((k + 1) * bar_w / len(tracked)))
+                  for k in range(len(tracked))]
 
-    footers = []
+    out = []
     for i in range(len(slides)):
         if i not in tracked:
-            footers.append(None)
+            out.append(None)
             continue
         segs = []
-        for k, slide in enumerate(tracked):
-            if slide in breaks:
-                segs.append((" ", "faint"))
-            a, b = bounds[k]
-            segs.append(("━" * (b - a), "dim") if slide <= i else ("─" * (b - a), "faint"))
-        segs.append((str(i + 1).rjust(number_w) if i > 0 else " " * number_w, "faint"))
-        footers.append(segs)
-    return footers
+        if progress:
+            for k, slide in enumerate(tracked):
+                if slide in breaks:
+                    segs.append((" ", "faint"))
+                a, b = bounds[k]
+                segs.append(("━" * (b - a), "dim") if slide <= i else ("─" * (b - a), "faint"))
+        else:
+            segs.append((" " * (width - number_w), "faint"))
+        segs.append((str(i - first + 1).rjust(number_w), "faint"))
+        out.append(segs)
+    return out
 
 
 def build(text, plugins):
@@ -411,11 +455,8 @@ def build(text, plugins):
     with open(os.path.join(HERE, "theme.typ"), encoding="utf-8") as f:
         out.append(f.read())
     slides = split_slides(body)
-    if meta["progress"].lower() in ("true", "yes", "on"):
-        footers = progress_bars(slides, columns)
-    else:
-        footers = [None] * len(slides)
-    for n, ((words, lines), footer) in enumerate(zip(slides, footers), 1):
+    lines_below = footers(slides, columns, meta["progress"].lower() in ("true", "yes", "on"))
+    for n, ((words, lines), footer) in enumerate(zip(slides, lines_below), 1):
         parts = parse_slide(lines, plugins, columns, n)
         align = "centre" if words & {"centre", "center"} else "bottom" if "bottom" in words else "top"
         footer_expr = "none" if footer is None else "(" + ", ".join(

@@ -1,27 +1,29 @@
 """chart: a chart drawn in characters. The first argument is the kind.
 
-    ```chart hbar
+    ```chart bar
     fiction     42
     philosophy  17
     letters      3
     ```
 
 kinds
-  hbar     `label value` rows, a bar to the right of each label (default
-           when the rows have labels)
-  bar      the same rows as upright columns with the labels beneath
-  line     one series of numbers per line, comma or space separated, drawn
-           in braille dots; up to three series, each a step dimmer
-  scatter  `x y` rows as braille dots
-  spark    one series as a single row of ▁▂▃▄▅▆▇█
+  bar             `label value` rows, a bar to the right of each label;
+                  the same as `bar horizontal`
+  bar vertical    the same rows as upright columns with the labels beneath
+  line            one series of numbers per line, comma or space separated,
+                  drawn in braille dots; up to three series, each a step
+                  dimmer
+  scatter         `x y` rows as braille dots
+  spark           one series as a single row of ▁▂▃▄▅▆▇█
 
 options
   height=8       rows for bar, line and scatter
   width=60       columns, if not the whole grid
   max=100        the top of the scale (min= for the bottom)
-  values=off     hide the figures on hbar and bar
+  values=off     hide the figures on bar charts
   axis=off       drop the axis and its labels on line and scatter
-  bar=3          the width of a column in `bar` (else its widest label)
+  bar=3          the width of a column in `bar vertical` (else its widest
+                 label)
 """
 
 import re
@@ -44,7 +46,9 @@ def series(body):
 
 def render(body, args, opts, width):
     width = int(opts.get("width", width))
-    kind = args[0] if args else "hbar"
+    kind = " ".join(args) or "bar"
+    if kind == "bar":
+        kind = "bar horizontal"
     if kind not in KINDS:
         raise ValueError(f"unknown chart kind {kind!r}; one of {', '.join(KINDS)}")
     lo = _draw.number(opts["min"]) if "min" in opts else None
@@ -218,4 +222,5 @@ def spark(body, opts, width, lo, hi):
     return lines
 
 
-KINDS = {"hbar": hbar, "bar": bar, "line": line, "scatter": scatter, "spark": spark}
+KINDS = {"bar horizontal": hbar, "bar vertical": bar, "line": line, "scatter": scatter,
+         "spark": spark}

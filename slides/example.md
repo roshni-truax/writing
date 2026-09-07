@@ -10,7 +10,7 @@ progress: true
 
 ## everything slides reads, on eight pages
 
-=== start chapter
+=== start
 
 # where the draft stands
 
@@ -29,7 +29,7 @@ and the fifth is an outline with **two** scenes written.
 
 # words per part
 
-```chart hbar
+```chart bar
 part one    41200
 part two    38900
 part three  44100
@@ -42,7 +42,7 @@ part five   2100
   - the harbour chapter can lose a scene
   - so can the letter
 
-=== chapter
+=== section
 
 # pace, words a day over the last month
 
@@ -56,7 +56,7 @@ part five   2100
 
 # revision by month
 
-```chart bar height=8
+```chart bar vertical height=8
 jan 12
 feb 9
 mar 14
@@ -71,7 +71,7 @@ jun 8
 12 9 14 3 11 8 10 15 14 12
 ```
 
-=== chapter
+=== section
 
 # a box, drawn by hand
 
@@ -90,6 +90,17 @@ jun 8
 # the last counted slide
 
 sits at the foot of the page.
+
+::: centre
+this paragraph is centred as text, and the chart under it as a block,
+by whole columns, so it keeps its shape.
+
+```chart bar vertical height=4
+one 3
+two 5
+three 2
+```
+:::
 
 === end centre
 
