@@ -21,7 +21,7 @@ options
   max=100        the top of the scale (min= for the bottom)
   values=off     hide the figures on hbar and bar
   axis=off       drop the axis and its labels on line and scatter
-  bar=3          the width of a column in `bar`
+  bar=3          the width of a column in `bar` (else its widest label)
 """
 
 import re
@@ -82,32 +82,27 @@ def bar(body, opts, width, lo, hi):
     if not data:
         raise ValueError("no rows")
     height = int(opts.get("height", 8))
-    bar_w = int(opts.get("bar", 3))
     show_values = opts.get("values", "on") != "off"
     n = len(data)
-    # columns spread across the width, labels sharing the slot beneath each
-    slot = max(bar_w + 1, width // n)
-    if slot * n > width:
+    # a column is as wide as its widest label (three at least, or `bar=`),
+    # with one space between columns; the chart hugs the left margin
+    bar_w = int(opts["bar"]) if "bar" in opts else max(3, max(len(l) for l, _ in data))
+    slot = bar_w + 1
+    if slot * n - 1 > width:
         raise ValueError(f"{n} bars do not fit in {width} columns")
     top = hi if hi is not None else max(v for _, v in data)
     top = top or 1
     cols = [_draw.vbar(v / top, height) for _, v in data]
     lines = []
     if show_values:
-        segs = []
-        for _, v in data:
-            segs.append((_draw.fmt(v).center(slot), "dim"))
-        lines.append(segs)
+        lines.append([("".join(_draw.fmt(v)[:bar_w].center(slot) for _, v in data).rstrip(), "dim")])
     for r in range(height):
-        row = ""
-        for col in cols:
-            row += (col[r] * bar_w).center(slot)
-        lines.append([(row, "fg")])
-    lines.append([("─" * (slot * n), "faint")])
+        lines.append([("".join(col[r] * bar_w + " " for col in cols).rstrip(), "fg")])
+    lines.append([("─" * (slot * n - 1), "faint")])
     labels = ""
     for label, _ in data:
-        labels += label[:slot - 1].center(slot)
-    lines.append([(labels, "dim")])
+        labels += label[:bar_w].center(slot)
+    lines.append([(labels.rstrip(), "dim")])
     return lines
 
 

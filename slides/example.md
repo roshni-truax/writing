@@ -1,26 +1,29 @@
 ---
 slides: true
 theme: dark
+progress: true
 ---
+
+=== centre
 
 # an example deck
 
-## everything slides reads, on seven pages
+## everything slides reads, on eight pages
 
-===
+=== start chapter
 
 # where the draft stands
 
 three of five parts are through revision. the fourth is in first draft
 and the fifth is an outline with **two** scenes written.
 
-```progress
-part one    100%
-part two    100%
-part three  100%
-part four   35%
-part five   1/10
-```
+| part   | words | state       |
+|--------|------:|-------------|
+| one    | 41200 | revised     |
+| two    | 38900 | revised     |
+| three  | 44100 | revised     |
+| four   | 15300 | first draft |
+| five   |  2100 | outline     |
 
 ===
 
@@ -39,7 +42,7 @@ part five   2100
   - the harbour chapter can lose a scene
   - so can the letter
 
-===
+=== chapter
 
 # pace, words a day over the last month
 
@@ -53,7 +56,7 @@ part five   2100
 
 # revision by month
 
-```chart bar height=8 bar=5
+```chart bar height=8
 jan 12
 feb 9
 mar 14
@@ -62,11 +65,13 @@ may 11
 jun 8
 ```
 
+---
+
 ```chart spark
 12 9 14 3 11 8 10 15 14 12
 ```
 
-===
+=== chapter
 
 # a box, drawn by hand
 
@@ -80,6 +85,12 @@ jun 8
 1. numbered lists work
 2. and so do [links](https://truax.io)
 
-===
+=== bottom
+
+# the last counted slide
+
+sits at the foot of the page.
+
+=== end centre
 
 # the end
