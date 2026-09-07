@@ -41,9 +41,10 @@ subtitle, paragraphs, `-` and `1.` lists (nested by indenting), `>` quotes,
 verbatim, unless its language names a plugin.
 
 Anything between `::: centre` and `:::` on lines of their own is centred
-across the page (`::: right` for the other side). Text centres as text;
-something drawn in characters moves as one block, by whole columns, so it
-keeps its shape and its place on the grid.
+across the page (`::: right` for the other side). Everything moves as a
+block: a paragraph's lines stay left-aligned to one another and the widest
+sets the block's width; something drawn in characters moves by whole
+columns, so it keeps its place on the grid.
 
 Plugins live in plugins/ beside this file; the file's name is the fence
 language. One exposes
@@ -271,7 +272,9 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
     aligned = {"centre": "center", "right": "right"}.get(halign)
 
     def add(expr):
-        parts.append(f"align({aligned}, {expr})" if aligned else expr)
+        # as a block: the box shrinks to the widest line, the lines inside
+        # stay left-aligned to one another, and the whole moves over
+        parts.append(f"align({aligned}, box(align(left, {expr})))" if aligned else expr)
 
     def flush():
         if paragraph:

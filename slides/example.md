@@ -92,8 +92,9 @@ jun 8
 sits at the foot of the page.
 
 ::: centre
-this paragraph is centred as text, and the chart under it as a block,
-by whole columns, so it keeps its shape.
+this paragraph and the chart under it are centred as blocks: the lines
+of the paragraph stay left-aligned to one another, and the chart moves
+by whole columns.
 
 ```chart bar vertical height=4
 one 3
