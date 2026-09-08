@@ -18,6 +18,10 @@ it expects, all from winget: neovim, wezterm, `JetBrainsMono Nerd Font`,
 pandoc and typst for the pdf export, `Automattic.harper-ls` for proofreading,
 lazygit, and python with `pypdfium2` and `pillow` for tpv.
 
+the same setup runs on the nas, over ssh from the same terminal, minus
+wezterm: `system/scripts/setup-nas.sh` in the monorepo installs the tools
+and links the config there.
+
 the theme is compiled from zenbones: after changing `nvim/lua/zenwritten_compile.lua`,
 run `:lua require("zenwritten_compile").compile()` and commit the generated
 files in `nvim/colors`, `nvim/lua/zenwritten_palette`, `nvim/lua/lualine/themes`

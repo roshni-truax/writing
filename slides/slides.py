@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """slides - markdown to a pdf slide deck, drawn in characters.
 
 A deck is a markdown file with `===` on a line of its own between slides.
@@ -40,6 +41,11 @@ subtitle, paragraphs, `-` and `1.` lists (nested by indenting), `>` quotes,
 **bold**, *emphasis*, `code`, [links](url). A fenced block is drawn
 verbatim, unless its language names a plugin.
 
+Blank lines count. One between blocks is the ordinary gap; each one after
+that adds a row of the grid, so air is added by leaving it. Blank lines at
+the start and end of a slide, around the `===`, are ignored. A line ending
+in a backslash breaks the line where it stands, without the gap.
+
 Anything between `::: centre` and `:::` on lines of their own is centred
 across the page (`::: right` for the other side). Everything moves as a
 block: a paragraph's lines stay left-aligned to one another and the widest
@@ -64,7 +70,7 @@ import shlex
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))  # through the symlink on the nas
 TONES = ("fg", "dim", "faint")
 DEFAULTS = {"theme": "dark", "size": "13pt", "columns": "72", "font": "JetBrainsMono NFM",
             "aspect": "16:9", "progress": "false"}
@@ -125,7 +131,10 @@ INLINE = re.compile(
 
 
 def inline(text):
-    """Markdown inline runs as a typst content expression."""
+    """Markdown inline runs as a typst content expression. A \\x00 in the
+    text is a hard line break (a source line that ended in a backslash)."""
+    if "\x00" in text:
+        return " + linebreak() + ".join(inline(part) for part in text.split("\x00"))
     parts = []
     pos = 0
     for m in INLINE.finditer(text):
@@ -278,7 +287,13 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
 
     def flush():
         if paragraph:
-            add(f"par({inline(' '.join(paragraph))})")
+            text = ""
+            for line in paragraph:
+                if line.endswith("\\"):
+                    text += line[:-1].rstrip() + "\x00"
+                else:
+                    text += line + " "
+            add(f"par({inline(text.strip(' ').rstrip(chr(0)))})")
             paragraph.clear()
 
     while i < len(lines):
@@ -390,8 +405,17 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
 
         if not line.strip():
             flush()
-        else:
-            paragraph.append(line.strip())
+            blank = 0
+            while i < len(lines) and not lines[i].strip():
+                blank += 1
+                i += 1
+            # the first blank line is the gap between blocks; any more are
+            # rows of air, except at the edges of the slide, where blank
+            # lines only keep the === company
+            if blank > 1 and parts and i < len(lines):
+                parts.append(f"air({blank - 1})")
+            continue
+        paragraph.append(line.strip())
         i += 1
 
     flush()

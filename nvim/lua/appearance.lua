@@ -8,7 +8,10 @@
 -- console layer: a bare `nvim -u NONE` in a genuinely light WezTerm window
 -- still comes up dark. So WezTerm writes its appearance to a file whenever
 -- it changes and this reads it - see wezterm/wezterm.lua.
-local file = io.open(vim.env.LOCALAPPDATA .. "/wezterm-appearance", "r")
+--
+-- On Linux (the nas, over ssh) the query works and neovim answers it for
+-- itself, so there is no file to read and this is skipped.
+local file = vim.env.LOCALAPPDATA and io.open(vim.env.LOCALAPPDATA .. "/wezterm-appearance", "r")
 if file then
   local value = vim.trim(file:read("l") or "")
   file:close()

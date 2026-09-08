@@ -8,7 +8,7 @@ progress: true
 
 # an example deck
 
-## everything slides reads, on eight pages
+## everything slides reads, on nine pages
 
 === start
 
@@ -73,6 +73,26 @@ jun 8
 
 === section
 
+# how a manuscript becomes a pdf
+
+```diagram
+(0,1) manuscript
+(1,1) pandoc
+(2,1) typst
+(2,0) pdf
+(0,0) tpv
+(0,1) -> (1,1)
+(1,1) -> (2,1)
+(2,1) -> (2,0)
+(2,0) -> (0,0)
+(0,0) - (0,1)
+```
+
+text at points, arrows between them. the grid spaces itself, and each
+arrow is routed around whatever text is in its way.
+
+===
+
 # a box, drawn by hand
 
 ```
@@ -84,6 +104,14 @@ jun 8
 
 1. numbered lists work
 2. and so do [links](https://truax.io)
+
+a line that ends in a backslash \
+breaks here, with no gap.
+
+
+
+three blank lines above this: the first is the ordinary gap, the other
+two are rows of air.
 
 === bottom
 

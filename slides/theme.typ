@@ -104,6 +104,10 @@
   text(fill: theme.dim, body),
 ))
 
+// Empty rows, from blank lines left in the source beyond the first: each
+// is one row of the grid, the height a line of characters takes.
+#let air(n) = v(n * 1.32em)
+
 // A rule across the grid, from `---` on a line of its own.
 #let rule() = ascii((( ("─" * cfg.columns, "faint"), ),))
 

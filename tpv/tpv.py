@@ -6,7 +6,9 @@ never grew a Windows half. This one doesn't. Pages are rasterised by
 pdfium - the renderer inside Chrome, shipped as a prebuilt wheel - and
 drawn with the iTerm2 inline-image escape, the one image protocol this
 wezterm renders on Windows: one escape per frame, wrapped in a
-synchronized update so every frame lands whole.
+synchronized update so every frame lands whole. It runs on Linux too,
+over ssh from the same terminal: only the keyboard half differs, and the
+frames travel as they are.
 
 The document is one continuous scroll, the way a manuscript reads, not a
 stack of screens. The pdf is read into memory and the file handle released
@@ -27,15 +29,21 @@ for: manuscript on the left, its pdf on the right, refreshing itself.
 
 import base64
 import bisect
-import ctypes
 import io
-import msvcrt
 import os
 import re
 import shutil
 import sys
 import threading
 import time
+
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+else:
+    import select
+    import termios
+    import tty
 
 import pypdfium2 as pdfium
 from PIL import Image
@@ -50,21 +58,24 @@ MAX_CANVAS = 4_000_000  # px budget per frame; the oversample yields to it
 GAP = 12                # the breath between pages, in pdf points
 LINE = 2                # rows of the terminal one j or k scrolls by
 
-def theme():
-    # The status line's faded ink, read the same way neovim reads the theme:
-    # from the file wezterm writes its appearance to (see wezterm/wezterm.lua),
-    # because the OSC query for the background never survives Windows'
-    # console layer. The values are zenwritten's, mixed to sit on its exact
-    # grounds. The gutter is transparent and needs nothing from here.
-    appearance = "dark"
-    state = os.path.join(os.environ.get("LOCALAPPDATA", ""), "wezterm-appearance")
-    try:
-        with open(state) as f:
-            value = f.read().strip()
-        if value in ("light", "dark"):
-            appearance = value
-    except OSError:
-        pass
+def theme(appearance=None):
+    # The status line's faded ink. On Windows it is read the same way neovim
+    # reads the theme: from the file wezterm writes its appearance to (see
+    # wezterm/wezterm.lua), because the OSC query for the background never
+    # survives Windows' console layer. On Linux the terminal is asked
+    # (TerminalInput.appearance) and the answer passed in. The values are
+    # zenwritten's, mixed to sit on its exact grounds. The gutter is
+    # transparent and needs nothing from here.
+    if appearance is None:
+        appearance = "dark"
+        state = os.path.join(os.environ.get("LOCALAPPDATA", ""), "wezterm-appearance")
+        try:
+            with open(state) as f:
+                value = f.read().strip()
+            if value in ("light", "dark"):
+                appearance = value
+        except OSError:
+            pass
     if appearance == "light":
         return (150, 145, 146)
     return (110, 100, 102)
@@ -327,66 +338,128 @@ class Tpv:
         self.scroll = self.tops[max(0, min(len(self.tops) - 1, number - 1))]
         self.clamp()
 
-class ConsoleInput:
-    # msvcrt throws away KEY_EVENT_RECORD.wRepeatCount: while a frame is
-    # drawing, Windows coalesces queued key repeats into one record with a
-    # count, and reading only the character loses the rest. Measured, that
-    # was 12 of every 31 generated repeats surviving - scrolling felt like
-    # 12Hz because most of it was quietly discarded. Reading the input
-    # records directly keeps every step the keyboard actually made.
+if os.name == "nt":
+    class ConsoleInput:
+        # msvcrt throws away KEY_EVENT_RECORD.wRepeatCount: while a frame is
+        # drawing, Windows coalesces queued key repeats into one record with a
+        # count, and reading only the character loses the rest. Measured, that
+        # was 12 of every 31 generated repeats surviving - scrolling felt like
+        # 12Hz because most of it was quietly discarded. Reading the input
+        # records directly keeps every step the keyboard actually made.
 
-    class KEY_EVENT(ctypes.Structure):
-        _fields_ = [
-            ("bKeyDown", ctypes.c_int32),
-            ("wRepeatCount", ctypes.c_uint16),
-            ("wVirtualKeyCode", ctypes.c_uint16),
-            ("wVirtualScanCode", ctypes.c_uint16),
-            ("UnicodeChar", ctypes.c_wchar),
-            ("dwControlKeyState", ctypes.c_uint32),
-        ]
+        class KEY_EVENT(ctypes.Structure):
+            _fields_ = [
+                ("bKeyDown", ctypes.c_int32),
+                ("wRepeatCount", ctypes.c_uint16),
+                ("wVirtualKeyCode", ctypes.c_uint16),
+                ("wVirtualScanCode", ctypes.c_uint16),
+                ("UnicodeChar", ctypes.c_wchar),
+                ("dwControlKeyState", ctypes.c_uint32),
+            ]
 
-    class INPUT_RECORD(ctypes.Structure):
-        pass
+        class INPUT_RECORD(ctypes.Structure):
+            pass
+
+        def __init__(self):
+            self.INPUT_RECORD._fields_ = [
+                ("EventType", ctypes.c_uint16),
+                ("KeyEvent", ConsoleInput.KEY_EVENT),
+            ]
+            self.k32 = ctypes.windll.kernel32
+            self.handle = self.k32.GetStdHandle(-10)
+
+        def read(self):
+            # every pending (char, repeat_count) keydown; [] when nothing waits
+            n = ctypes.c_uint32(0)
+            if not self.k32.GetNumberOfConsoleInputEvents(self.handle, ctypes.byref(n)) or n.value == 0:
+                return []
+            records = (self.INPUT_RECORD * n.value)()
+            got = ctypes.c_uint32(0)
+            if not self.k32.ReadConsoleInputW(self.handle, records, n.value, ctypes.byref(got)):
+                return []
+            events = []
+            for rec in records[: got.value]:
+                if rec.EventType == 1 and rec.KeyEvent.UnicodeChar != "\x00":
+                    # key-ups travel too: a release is a fact worth knowing
+                    events.append((
+                        rec.KeyEvent.UnicodeChar,
+                        max(1, rec.KeyEvent.wRepeatCount),
+                        bool(rec.KeyEvent.bKeyDown),
+                    ))
+            return events
+
+        def restore(self):
+            pass
+
+class TerminalInput:
+    # The Linux half of the keyboard: stdin taken out of line mode so keys
+    # arrive as they are pressed, and read whenever bytes are waiting. A
+    # terminal sends no key-up, so a release is never seen; the main loop
+    # already treats a pause in the repeats as one, since Windows' console
+    # loses releases too.
 
     def __init__(self):
-        self.INPUT_RECORD._fields_ = [
-            ("EventType", ctypes.c_uint16),
-            ("KeyEvent", ConsoleInput.KEY_EVENT),
-        ]
-        self.k32 = ctypes.windll.kernel32
-        self.handle = self.k32.GetStdHandle(-10)
+        self.fd = sys.stdin.fileno()
+        self.old = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)  # not raw: output keeps its newline handling
+        attrs = termios.tcgetattr(self.fd)
+        # Enter stays \r rather than turning into ctrl-j's \n, and ctrl-s
+        # stops being flow control, which would freeze the frames
+        attrs[0] &= ~(termios.ICRNL | termios.IXON)
+        termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
 
     def read(self):
-        # every pending (char, repeat_count) keydown; [] when nothing waits
-        n = ctypes.c_uint32(0)
-        if not self.k32.GetNumberOfConsoleInputEvents(self.handle, ctypes.byref(n)) or n.value == 0:
-            return []
-        records = (self.INPUT_RECORD * n.value)()
-        got = ctypes.c_uint32(0)
-        if not self.k32.ReadConsoleInputW(self.handle, records, n.value, ctypes.byref(got)):
-            return []
         events = []
-        for rec in records[: got.value]:
-            if rec.EventType == 1 and rec.KeyEvent.UnicodeChar != "\x00":
-                # key-ups travel too: a release is a fact worth knowing
-                events.append((
-                    rec.KeyEvent.UnicodeChar,
-                    max(1, rec.KeyEvent.wRepeatCount),
-                    bool(rec.KeyEvent.bKeyDown),
-                ))
+        while select.select([self.fd], [], [], 0)[0]:
+            data = os.read(self.fd, 4096)
+            if not data:
+                break
+            events.extend((ch, 1, True) for ch in data.decode("utf-8", "ignore"))
         return events
 
-def measure_cell():
+    def query(self, request, pattern, timeout=0.25):
+        # a question for the terminal, and its answer if one comes in time
+        sys.stdout.write(request)
+        sys.stdout.flush()
+        reply = ""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            m = re.search(pattern, reply)
+            if m:
+                return m
+            wait = max(0.0, deadline - time.monotonic())
+            if select.select([self.fd], [], [], wait)[0]:
+                reply += os.read(self.fd, 4096).decode("utf-8", "ignore")
+        return None
+
+    def appearance(self):
+        # OSC 11 asks for the background colour; anything bright is light.
+        # The reply is rgb:RRRR/GGGG/BBBB, so the top byte of each is enough.
+        m = self.query(f"{ESC}]11;?{ESC}\\", r"\x1b\]11;rgb:([0-9a-fA-F]+)/([0-9a-fA-F]+)/([0-9a-fA-F]+)")
+        if not m:
+            return "dark"
+        r, g, b = (int(c[:2], 16) for c in m.groups())
+        return "light" if 0.2126 * r + 0.7152 * g + 0.0722 * b > 128 else "dark"
+
+    def restore(self):
+        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+
+def measure_cell(con):
     # Ask the terminal for its cell size in pixels (XTWINOPS 16t), so pages
-    # keep their true aspect whatever the font settings are. VT input is
-    # switched on only long enough to hear the answer, then restored; when
-    # no answer comes, the estimate measured against this repo's wezterm
-    # font stands in.
+    # keep their true aspect whatever the font settings are. On Windows, VT
+    # input is switched on only long enough to hear the answer, then
+    # restored; on Linux the keyboard reader asks. When no answer comes,
+    # the estimate measured against this repo's wezterm font stands in.
+    if os.name != "nt":
+        m = con.query(f"{ESC}[16t", r"\x1b\[6;(\d+);(\d+)t")
+        if m and int(m.group(1)) > 0 and int(m.group(2)) > 0:
+            return int(m.group(2)), int(m.group(1)), True
+        return CELL_W, CELL_H, False
     k32 = ctypes.windll.kernel32
     handle = k32.GetStdHandle(-10)
     old = ctypes.c_uint32()
     if not k32.GetConsoleMode(handle, ctypes.byref(old)):
-        return CELL_W, CELL_H
+        return CELL_W, CELL_H, False
     try:
         k32.SetConsoleMode(handle, old.value | 0x0200)
         sys.stdout.write(f"{ESC}[16t")
@@ -407,12 +480,14 @@ def measure_cell():
 
 def main():
     args = sys.argv[1:]
-    if len(args) != 1 or args[0] in ("-h", "--help"):
-        print(__doc__)
-        raise SystemExit(0 if args and args[0] in ("-h", "--help") else 1)
+    if len(args) != 1:
+        raise SystemExit(1)  # the keys are in the docstring above, not on screen
 
     tpv = Tpv(args[0])
-    tpv.cell_w, tpv.cell_h, tpv.cell_measured = measure_cell()
+    con = ConsoleInput() if os.name == "nt" else TerminalInput()
+    if os.name != "nt":
+        tpv.faded = theme(con.appearance())
+    tpv.cell_w, tpv.cell_h, tpv.cell_measured = measure_cell(con)
     # The primary screen, and the cursor left alone - both deliberately.
     # This stack shows images nowhere but the primary screen, and hiding
     # the cursor (ESC[?25l) silently suppresses every image drawn after
@@ -472,7 +547,6 @@ def main():
     try:
         tpv.render()
         tpv.start_prefetcher()
-        con = ConsoleInput()
         last_size = shutil.get_terminal_size()
         last_check = time.monotonic()
         settle_at = None  # when a moving page owes itself a sharp frame
@@ -613,6 +687,7 @@ def main():
     finally:
         sys.stdout.write(f"{ESC}[2J{ESC}[H{ESC}[?25h")
         sys.stdout.flush()
+        con.restore()
 
 if __name__ == "__main__":
     main()

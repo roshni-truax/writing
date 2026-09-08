@@ -36,8 +36,13 @@ return {
             if node.type == "file" and node.name:lower():match("%.pdf$") then
               -- tpv ships beside this config, one level up from the real
               -- nvim folder behind the junction
+              -- (on the nas, `tpv` on the path runs it through its venv; the
+              -- wezterm pane it wants is still on the far side of ssh, so
+              -- there this only reports that wezterm is missing)
               local config = vim.uv.fs_realpath(vim.fn.stdpath("config")) or vim.fn.stdpath("config")
-              local view = { "python", vim.fs.dirname(config) .. "/tpv/tpv.py", node.path }
+              local view = vim.fn.has("win32") == 1
+                and { "python", vim.fs.dirname(config) .. "/tpv/tpv.py", node.path }
+                or { "tpv", node.path }
               vim.system(
                 vim.list_extend({ "wezterm", "cli", "split-pane", "--right", "--percent", "50", "--" }, view),
                 {},

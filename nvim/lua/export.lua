@@ -36,7 +36,8 @@ function M.export()
     -- slides ships beside this config, one level up from the real nvim
     -- folder behind the junction (the junction's own parent is AppData)
     local real = vim.uv.fs_realpath(config) or config
-    cmd = { "python", vim.fs.dirname(real) .. "/slides/slides.py", source, "-o", pdf }
+    local python = vim.fn.has("win32") == 1 and "python" or "python3"
+    cmd = { python, vim.fs.dirname(real) .. "/slides/slides.py", source, "-o", pdf }
   else
     cmd = {
       "pandoc",
