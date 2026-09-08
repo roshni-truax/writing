@@ -8,8 +8,22 @@ EIGHTHS_H = " ▏▎▍▌▋▊▉█"  # a bar growing to the right, in eighth
 EIGHTHS_V = " ▁▂▃▄▅▆▇█"  # a bar growing upward, in eighths
 
 
-def number(s):
-    """A number from text: 42, 4.2, 60%, 3/5, 1,200."""
+class Number(float):
+    """A number that remembers how the deck wrote it.
+
+    A chart prints its figures back to the reader, and rounding them into a
+    tidier shape loses what the writer said: 50.0 is not 50, and a share
+    written 60% should not read 0.6. This is a float in every other way, so
+    it adds up and compares like one; `fmt` prints the text it came from.
+    """
+
+    def __new__(cls, text):
+        value = float.__new__(cls, _value(text))
+        value.text = text
+        return value
+
+
+def _value(s):
     s = s.strip().replace(",", "")
     if s.endswith("%"):
         return float(s[:-1]) / 100
@@ -19,8 +33,16 @@ def number(s):
     return float(s)
 
 
+def number(s):
+    """A number from text: 42, 4.2, 60%, 3/5, 1,200."""
+    return Number(s)
+
+
 def fmt(x):
-    """A number as it would be written by hand: 42, 4.2, 0.35, 1200."""
+    """A number as the deck wrote it, or, for one this file worked out
+    rather than read, as it would be written by hand: 42, 4.2, 0.35, 1200."""
+    if isinstance(x, Number):
+        return x.text
     if x == int(x) and abs(x) < 1e15:
         return str(int(x))
     return f"{x:.2f}".rstrip("0").rstrip(".")
