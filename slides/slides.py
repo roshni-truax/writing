@@ -39,7 +39,9 @@ Markdown that is understood: `#` is the slide's title, `##` and deeper a dim
 subtitle, paragraphs, `-` and `1.` lists (nested by indenting), `>` quotes,
 `|` tables, `---` for a rule, `![alt](path)` on its own line, and inline
 **bold**, *emphasis*, `code`, [links](url). A fenced block is drawn
-verbatim, unless its language names a plugin.
+verbatim, unless its language names a plugin. The word `small` on a fence
+line sets that block in smaller type on a finer grid, which is how a dense
+chart or diagram is made to fit.
 
 Blank lines count. One between blocks is the ordinary gap; each one after
 that adds a row of the grid, so air is added by leaving it. Blank lines at
@@ -72,6 +74,7 @@ import sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))  # through the symlink on the nas
 TONES = ("fg", "dim", "faint")
+SMALL = 0.8  # the type size of a block whose fence says `small`
 DEFAULTS = {"theme": "dark", "size": "13pt", "columns": "72", "font": "JetBrainsMono NFM",
             "aspect": "16:9", "progress": "false"}
 WORDS = {"centre", "center", "bottom", "start", "section", "end"}
@@ -154,7 +157,7 @@ def inline(text):
     return " + ".join(parts) or 'text("")'
 
 
-def ascii_expr(lines, width=None, halign="left"):
+def ascii_expr(lines, width=None, halign="left", scale=1.0):
     """`width` and `halign` shift the block as one, by whole columns."""
     if halign != "left" and width:
         widest = max(sum(len(t) for t, _ in segs) for segs in lines)
@@ -163,7 +166,8 @@ def ascii_expr(lines, width=None, halign="left"):
     rows = []
     for segs in lines:
         rows.append("(" + ", ".join(f"({q(t)}, {q(tone)})" for t, tone in segs) + ",)")
-    return "ascii((" + ", ".join(rows) + ",))"
+    tail = "" if scale == 1.0 else f", scale: {scale}"
+    return "ascii((" + ", ".join(rows) + ",)" + tail + ")"
 
 
 # --- markdown ----------------------------------------------------------------
@@ -328,20 +332,25 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                 i += 1
             i += 1  # closing fence
             words = shlex.split(info)
+            # `small` is not part of the language: it sets the block in
+            # smaller type, so the same page width is more characters wide
+            scale = SMALL if "small" in words else 1.0
+            words = [w for w in words if w != "small"]
+            cells = round(width / scale)
             lang = words[0] if words else ""
             where = f"slide {number}, ```{lang}"
             if lang in plugins:
                 args = [w for w in words[1:] if "=" not in w]
                 opts = dict(w.split("=", 1) for w in words[1:] if "=" in w)
                 try:
-                    drawn = plugins[lang].render("\n".join(body), args, opts, width)
+                    drawn = plugins[lang].render("\n".join(body), args, opts, cells)
                 except DeckError:
                     raise
                 except Exception as e:  # a plugin's own mistake, named plainly
                     raise DeckError(f"{where}: {type(e).__name__}: {e}") from e
             else:
                 drawn = body
-            parts.append(ascii_expr(normalise_lines(drawn, width, where), width, halign))
+            parts.append(ascii_expr(normalise_lines(drawn, cells, where), cells, halign, scale))
             continue
 
         if RULE.match(line):
@@ -488,7 +497,7 @@ def build(text, plugins):
         align = "centre" if words & {"centre", "center"} else "bottom" if "bottom" in words else "top"
         footer_expr = "none" if footer is None else "(" + ", ".join(
             f"({q(t)}, {q(tone)})" for t, tone in footer) + ",)"
-        out.append(f"#slide(align: {q(align)}, footer: {footer_expr},\n  "
+        out.append(f"#slide(number: {n}, align: {q(align)}, footer: {footer_expr},\n  "
                    + ",\n  ".join(parts) + ",\n)")
     return "\n".join(out) + "\n"
 
@@ -521,9 +530,13 @@ def main():
     # from the deck's own folder, so an image path in it resolves
     proc = subprocess.run(cmd, input=typ.encode("utf-8"), cwd=os.path.dirname(os.path.abspath(args.source)),
                           capture_output=True)
-    sys.stderr.write(proc.stderr.decode("utf-8", "replace"))
+    stderr = proc.stderr.decode("utf-8", "replace")
     if proc.returncode != 0:
-        sys.exit(proc.returncode)
+        # a slide that does not fit is the one failure with something useful
+        # to say; typst wraps it in a traceback nobody needs
+        panic = re.search(r"panicked with: (.*)", stderr)
+        sys.exit(f"slides: {panic.group(1)}" if panic else stderr.rstrip())
+    sys.stderr.write(stderr)
     print(f"wrote {os.path.basename(output)}")
 
 

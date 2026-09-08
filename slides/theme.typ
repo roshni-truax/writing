@@ -24,10 +24,16 @@
 // line is a list of (text, tone) pairs. Rows are set with no leading and
 // the glyph box reaching ascender to descender, so box-drawing characters
 // in one row meet those in the next.
-#let ascii(lines) = block(
+//
+// `scale` is 1 unless the fence said `small`, when slides.py sets the type
+// smaller and hands the block proportionally more characters to fill the
+// same width. Every measure here is taken from the block's own size, so a
+// small block is the same drawing on a finer grid.
+#let ascii(lines, scale: 1.0) = block(
   width: 100%,
   {
-    set text(top-edge: "ascender", bottom-edge: "descender")
+    let cell = 0.6 * scale * cfg.size
+    set text(size: scale * cfg.size, top-edge: "ascender", bottom-edge: "descender")
     set par(leading: 0em)
     // Block elements (█ ▌ ▁ ░ and the rest of U+2580-259F) meet edge to
     // edge, and every renderer leaves a hairline where two shapes share a
@@ -35,9 +41,9 @@
     // each block glyph is drawn 5% larger, centred on its cell, over an
     // invisible copy that holds the cell's place on the grid. Neighbours
     // then overlap by a fraction of a point and the fill reads as one shape.
-    show regex("[\u{2580}-\u{259F}]"): it => box(width: ch, {
+    show regex("[\u{2580}-\u{259F}]"): it => box(width: cell, {
       hide(it)
-      place(top + left, dx: -0.025 * ch, dy: -0.033em, text(size: 1.05em, it.text))
+      place(top + left, dx: -0.025 * cell, dy: -0.033em, text(size: 1.05em, it.text))
     })
     lines.map(line =>
       line.map(seg => text(fill: tone(seg.at(1)), seg.at(0))).join()
@@ -81,10 +87,24 @@
 // A slide is a page. Content sits at the top unless the `===` before the
 // slide says centre or bottom. `footer` is the footer line's segments, or
 // none for the slide number alone.
-#let slide(align: "top", footer: none, ..parts) = {
+//
+// The body is measured first. Typst would otherwise let a slide that does
+// not fit run on to a second page, which is a slide the author never wrote,
+// carrying the same number and the same progress bar. Stopping instead
+// makes it something to fix rather than something to notice later; slides.py
+// turns the panic into a plain line.
+#let room = page-height - 1.6cm - 1.4cm
+
+#let slide(number: 0, align: "top", footer: none, ..parts) = {
   pagebreak(weak: true)
   footer-line.update(footer)
   let body = parts.pos().join()
+  context {
+    if measure(block(width: text-width, body)).height > room {
+      panic("slide " + str(number) + " is taller than the page: shorten it, "
+            + "split it at a ===, or set a block `small`")
+    }
+  }
   if align == "centre" { v(1fr); body; v(1fr) }
   else if align == "bottom" { v(1fr); body }
   else { body }

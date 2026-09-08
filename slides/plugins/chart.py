@@ -6,6 +6,13 @@
     letters      3
     ```
 
+Up to three numbers may follow a label. The bars are then drawn one over
+another rather than side by side, the shortest in front, so each colour
+owns the stretch where its bar is the shortest one covering it: the first
+number in the text's own ink, the second and third a step and two steps
+fainter. Written against a target, `41200 40000` fills to the target in the
+fainter ink and shows the overshoot in the brighter one.
+
 kinds
   bar             `label value` rows, a bar to the right of each label;
                   the same as `bar horizontal`
@@ -31,6 +38,7 @@ import re
 import _draw
 
 TONES = ("fg", "dim", "faint")
+BARS = 3  # numbers a bar row may carry
 
 
 def series(body):
@@ -56,58 +64,87 @@ def render(body, args, opts, width):
     return KINDS[kind](body, opts, width, lo, hi)
 
 
+def figure_columns(data, show_values):
+    """The printed numbers per row, and the width each column needs."""
+    if not show_values:
+        return [], []
+    figures = [[_draw.fmt(v) for v in values] for _, values in data]
+    widths = [max(len(f[k]) for f in figures) for k in range(len(figures[0]))]
+    return figures, widths
+
+
 def hbar(body, opts, width, lo, hi):
-    data = _draw.rows(body)
+    data = _draw.rows(body, most=BARS)
     if not data:
         raise ValueError("no rows")
     show_values = opts.get("values", "on") != "off"
     label_w = max(len(l) for l, _ in data)
-    figures = [_draw.fmt(v) for _, v in data]
-    figure_w = max(len(f) for f in figures) + 1 if show_values else 0
+    figures, fig_w = figure_columns(data, show_values)
+    figure_w = sum(w + 1 for w in fig_w)
     bar_w = width - figure_w - (label_w + 2 if label_w else 0)
     if bar_w < 4:
         raise ValueError("too narrow for a bar")
-    top = hi if hi is not None else max(v for _, v in data)
+    top = hi if hi is not None else max(max(values) for _, values in data)
     top = top or 1
     lines = []
-    for (label, value), figure in zip(data, figures):
+    for n, (label, values) in enumerate(data):
         segs = []
         if label_w:
             segs.append((label.ljust(label_w) + "  ", "fg"))
-        segs.append((_draw.hbar(value / top, bar_w), "fg"))
-        if show_values:
-            segs.append((figure.rjust(figure_w), "dim"))
+        segs.extend(_draw.nested_h(values, top, bar_w, TONES))
+        for k, w in enumerate(fig_w):
+            # one series' figures stay dim, as the quieter half of the row;
+            # several take their own bar's ink, which is what ties them
+            tone = "dim" if len(fig_w) == 1 else TONES[k]
+            segs.append((" " + figures[n][k].rjust(w), tone))
         lines.append(segs)
     return lines
 
 
 def bar(body, opts, width, lo, hi):
-    data = _draw.rows(body)
+    data = _draw.rows(body, most=BARS)
     if not data:
         raise ValueError("no rows")
     height = int(opts.get("height", 8))
     show_values = opts.get("values", "on") != "off"
     n = len(data)
-    # a column is as wide as its widest label (three at least, or `bar=`),
-    # with one space between columns; the chart hugs the left margin
-    bar_w = int(opts["bar"]) if "bar" in opts else max(3, max(len(l) for l, _ in data))
+    figures, fig_w = figure_columns(data, show_values)
+    # a column is as wide as its widest label or figure (three at least, or
+    # `bar=`), with one space between columns; the chart hugs the left margin
+    bar_w = int(opts["bar"]) if "bar" in opts else max(
+        3, max(len(l) for l, _ in data), max(fig_w or [0]))
     slot = bar_w + 1
     if slot * n - 1 > width:
         raise ValueError(f"{n} bars do not fit in {width} columns")
-    top = hi if hi is not None else max(v for _, v in data)
+    top = hi if hi is not None else max(max(values) for _, values in data)
     top = top or 1
-    cols = [_draw.vbar(v / top, height) for _, v in data]
+    cols = [_draw.nested_v(values, top, height, TONES) for _, values in data]
     lines = []
-    if show_values:
-        lines.append([("".join(_draw.fmt(v)[:bar_w].center(slot) for _, v in data).rstrip(), "dim")])
+    # a line of figures per series, above the columns, each in its bar's ink
+    for k, w in enumerate(fig_w):
+        tone = "dim" if len(fig_w) == 1 else TONES[k]
+        row = "".join(figures[i][k][:bar_w].center(slot) for i in range(n))
+        lines.append([(row.rstrip(), tone)])
     for r in range(height):
-        lines.append([("".join(col[r] * bar_w + " " for col in cols).rstrip(), "fg")])
+        segs = []
+        for col in cols:
+            ch, tone = col[r]
+            segs.append((ch * bar_w, tone))
+            segs.append((" ", "fg"))
+        lines.append(trim_right(segs))
     lines.append([("─" * (slot * n - 1), "faint")])
     labels = ""
     for label, _ in data:
         labels += label[:bar_w].center(slot)
     lines.append([(labels.rstrip(), "dim")])
     return lines
+
+
+def trim_right(segs):
+    """The same segments with the trailing blank ones dropped."""
+    while segs and not segs[-1][0].strip():
+        segs.pop()
+    return segs or [(" ", "fg")]
 
 
 def _axis_labels(lo, hi, height):

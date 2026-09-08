@@ -30,12 +30,16 @@ and the fifth is an outline with **two** scenes written.
 # words per part
 
 ```chart bar
-part one    41200
-part two    38900
-part three  44100
-part four   15300
-part five   2100
+part one    41200 40000
+part two    38900 40000
+part three  44100 40000
+part four   15300 40000
+part five   2100 40000
 ```
+
+two numbers a row: what is written, then the target. the shorter bar sits
+in front, so the ink changes where the smaller number falls. part four's
+brighter stretch is the words it has; part three's is the overshoot.
 
 - the parts are meant to sit near *forty thousand*
 - part three runs long; see `cut-list.md`
@@ -52,24 +56,25 @@ part five   2100
 
 > a working day is a thousand words; a good one is fifteen hundred.
 
+```chart spark
+800 1200 950 300 1400 1600 1100 900 1300 1500 1700 1200
+```
+
 ===
 
 # revision by month
 
-```chart bar vertical height=8
-jan 12
-feb 9
-mar 14
-apr 3
-may 11
-jun 8
+```chart bar vertical small height=8
+jan 12 9 4
+feb 9 7 2
+mar 14 11 6
+apr 3 2 1
+may 11 8 5
+jun 8 6 3
 ```
 
----
-
-```chart spark
-12 9 14 3 11 8 10 15 14 12
-```
+three numbers here: chapters revised, sent, and signed off. `small` sets a
+block in smaller type on a finer grid, for a chart too dense for the page.
 
 === section
 
