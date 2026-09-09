@@ -118,23 +118,33 @@ def _ends(values, top, length):
     """Where each bar ends, in cells, shortest first.
 
     Bars sharing a row are drawn one over another with the shortest in
-    front, so each colour owns the stretch where its bar is the shortest one
-    covering it. A cell carries one colour, so the boundaries inside land on
-    whole cells; only the outermost tip keeps its eighth, which is the tip a
-    reader measures the length by.
+    front. A cell carries one colour, so the rule is that a cell takes the
+    colour of the shortest bar that covers the whole of it, and the longest
+    bar keeps the eighth-block tip that says where it really stops.
+
+    Covering the whole of a cell is what makes this behave. Rounding to the
+    nearest cell instead let a bar claim ground it did not reach, and two
+    bars a few percent apart on a short axis ended as one colour, the longer
+    one squeezed out of its own row. Two bars of the same value are one bar,
+    and the one written first is the one in front.
     """
     order = sorted(range(len(values)), key=lambda i: values[i])
+    drawn, seen = [], set()
+    for i in order:
+        if values[i] not in seen:
+            seen.add(values[i])
+            drawn.append(i)
     out, prev = [], 0
-    for n, i in enumerate(order):
+    for n, i in enumerate(drawn):
         cells = max(0.0, min(1.0, values[i] / top if top else 0)) * length
-        if n == len(order) - 1:
+        if n == len(drawn) - 1:
             full = max(prev, min(length, int(cells)))
             rest = max(0, min(8, int(round((cells - full) * 8))))
             partial = EIGHTHS_H[rest] if full < length and rest else None
             out.append((i, prev, full, partial))
             prev = full + (1 if partial else 0)
         else:
-            end = max(prev, min(length, round(cells)))
+            end = max(prev, min(length, int(cells)))
             out.append((i, prev, end, None))
             prev = end
     return out

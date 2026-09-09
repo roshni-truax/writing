@@ -76,6 +76,27 @@ jun 8 6 3
 three numbers here: chapters revised, sent, and signed off. `small` sets a
 block in smaller type on a finer grid, for a chart too dense for the page.
 
+=== 
+
+# side by side, two shares to one
+
+::: row 2 1
+```chart bar left-title="words a part"
+part one 41200
+part two 38900
+part three 44100
+part four 15300
+```
+
+```chart bar vertical height=6 title="parts done"
+done 3
+left 2
+```
+:::
+
+`::: row` splits the grid between its columns, a blank line starting each
+one. `title=` goes under a block; `left-title=` stands at its left, turned.
+
 === section
 
 # how a manuscript becomes a pdf

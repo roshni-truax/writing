@@ -39,9 +39,15 @@ Markdown that is understood: `#` is the slide's title, `##` and deeper a dim
 subtitle, paragraphs, `-` and `1.` lists (nested by indenting), `>` quotes,
 `|` tables, `---` for a rule, `![alt](path)` on its own line, and inline
 **bold**, *emphasis*, `code`, [links](url). A fenced block is drawn
-verbatim, unless its language names a plugin. The word `small` on a fence
-line sets that block in smaller type on a finer grid, which is how a dense
-chart or diagram is made to fit.
+verbatim, unless its language names a plugin. Three words on a fence line
+say how the block is set, whatever drew it:
+
+  small               smaller type on a finer grid, for a dense chart
+  title="..."         a line under the block, centred on what it drew
+  left-title="..."    at its left, turned a quarter turn, and set as type
+
+A chart whose bars stand up usually wants `title=`, and one whose bars run
+across the page `left-title=`, the only thing here not made of characters.
 
 Blank lines count. One between blocks is the ordinary gap; each one after
 that adds a row of the grid, so air is added by leaving it. Blank lines at
@@ -53,6 +59,13 @@ across the page (`::: right` for the other side). Everything moves as a
 block: a paragraph's lines stay left-aligned to one another and the widest
 sets the block's width; something drawn in characters moves by whole
 columns, so it keeps its place on the grid.
+
+`::: row` puts what it holds side by side instead, splitting the grid
+between the columns with two characters between them. A blank line starts
+the next column, so two charts with a line between them are two columns;
+wrap several blocks in a `::: left` to keep them in one column. Numbers on
+the line are the columns' shares, so `::: row 2 1` makes the first twice
+the width of the second. These wrappers nest.
 
 Plugins live in plugins/ beside this file; the file's name is the fence
 language. One exposes
@@ -177,9 +190,78 @@ HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*$")
 LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 IMAGE = re.compile(r"^!\[([^\]]*)\]\(([^)\s]+)\)(?:\{width=([^}]+)\})?\s*$")
 QUOTE = re.compile(r"^>\s?(.*)$")
-DIV_OPEN = re.compile(r"^:{3,}\s*(\S+)\s*$")
+DIV_OPEN = re.compile(r"^:{3,}\s*(\S+)((?:\s+\S+)*)\s*$")
+GUTTER = 2      # characters between the columns of a `::: row`
+LEFT_TITLE = 3  # characters a turned title and its gap take at a block's left
 DIV_CLOSE = re.compile(r"^:{3,}\s*$")
 ALIGNS = {"centre": "centre", "center": "centre", "right": "right", "left": "left"}
+
+
+def close_div(lines, start):
+    """Where the `:::` opened just before `start` is closed, counting the
+    wrappers inside it and stepping over fenced blocks, whose contents are
+    nobody's business but their own. None if it never closes."""
+    depth, fence, i = 1, None, start
+    while i < len(lines):
+        line = lines[i]
+        if fence is not None:
+            if line.startswith(fence):
+                fence = None
+        elif FENCE.match(line):
+            fence = FENCE.match(line).group(1)
+        elif DIV_OPEN.match(line):
+            depth += 1
+        elif DIV_CLOSE.match(line):
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def columns_of(lines):
+    """A row's lines split into one group per column, at the blank lines
+    that sit between its blocks rather than inside one."""
+    groups, current, depth, fence = [], [], 0, None
+    for line in lines:
+        if fence is not None:
+            current.append(line)
+            if line.startswith(fence):
+                fence = None
+            continue
+        if FENCE.match(line):
+            fence = FENCE.match(line).group(1)
+            current.append(line)
+            continue
+        if DIV_OPEN.match(line):
+            depth += 1
+        elif DIV_CLOSE.match(line):
+            depth -= 1
+        elif depth == 0 and not line.strip():
+            if any(l.strip() for l in current):
+                groups.append(current)
+            current = []
+            continue
+        current.append(line)
+    if any(l.strip() for l in current):
+        groups.append(current)
+    return groups
+
+
+def shares(weights, count, width, number):
+    """Each column's width in characters, to the shares given or evenly,
+    the rounding going to the widest so they add up to the grid."""
+    if weights and len(weights) != count:
+        raise DeckError(f"slide {number}: {len(weights)} shares given for {count} columns")
+    weights = weights or [1.0] * count
+    if any(w <= 0 for w in weights):
+        raise DeckError(f"slide {number}: a column's share has to be more than nothing")
+    room = width - GUTTER * (count - 1)
+    if room < count * 4:
+        raise DeckError(f"slide {number}: {count} columns do not fit in {width} characters")
+    out = [int(room * w / sum(weights)) for w in weights]
+    out[out.index(max(out))] += room - sum(out)
+    return out
 RULE = re.compile(r"^-{3,}\s*$")
 TABLE_ROW = re.compile(r"^\|.*\|\s*$")
 TABLE_SEP = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
@@ -306,17 +388,30 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
         if div:
             flush()
             word = div.group(1).lower()
-            if word not in ALIGNS:
-                raise DeckError(f"slide {number}: ::: takes centre, right or left, not {word!r}")
-            inner = []
-            i += 1
-            while i < len(lines) and not DIV_CLOSE.match(lines[i]):
-                inner.append(lines[i])
-                i += 1
-            if i == len(lines):
+            rest = div.group(2).split()
+            if word != "row" and word not in ALIGNS:
+                raise DeckError(f"slide {number}: ::: takes centre, right, left or row, "
+                                f"not {word!r}")
+            end = close_div(lines, i + 1)
+            if end is None:
                 raise DeckError(f"slide {number}: a ::: {word} never closes")
-            i += 1
-            parts.extend(parse_slide(inner, plugins, width, number, ALIGNS[word], has_title))
+            inner, i = lines[i + 1:end], end + 1
+            if word == "row":
+                groups = columns_of(inner)
+                if not groups:
+                    raise DeckError(f"slide {number}: a ::: row with nothing in it")
+                try:
+                    weights = [float(r) for r in rest]
+                except ValueError:
+                    raise DeckError(f"slide {number}: a ::: row takes numbers for the "
+                                    f"columns' shares, not {' '.join(rest)!r}")
+                cols = []
+                for group, share in zip(groups, shares(weights, len(groups), width, number)):
+                    inside = parse_slide(group, plugins, share, number, "left", has_title)
+                    cols.append(f"({share}, ({', '.join(inside)},).join())")
+                add("row(" + ", ".join(cols) + ")")
+            else:
+                parts.extend(parse_slide(inner, plugins, width, number, ALIGNS[word], has_title))
             has_title = has_title or any(HEADING.match(l) and HEADING.match(l).group(1) == "#"
                                          for l in inner)
             continue
@@ -332,11 +427,16 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                 i += 1
             i += 1  # closing fence
             words = shlex.split(info)
-            # `small` is not part of the language: it sets the block in
-            # smaller type, so the same page width is more characters wide
+            # these say how the block is set rather than what drew it, so
+            # they come off before the rest of the line names a plugin
             scale = SMALL if "small" in words else 1.0
-            words = [w for w in words if w != "small"]
-            cells = round(width / scale)
+            titles = {w.split("=", 1)[0]: w.split("=", 1)[1] for w in words
+                      if w.startswith(("title=", "left-title="))}
+            words = [w for w in words
+                     if w != "small" and not w.startswith(("title=", "left-title="))]
+            # a turned title stands in the block's room, so the block is
+            # drawn that much narrower rather than wrapping against it
+            cells = round((width - (LEFT_TITLE if "left-title" in titles else 0)) / scale)
             lang = words[0] if words else ""
             where = f"slide {number}, ```{lang}"
             if lang in plugins:
@@ -350,7 +450,18 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                     raise DeckError(f"{where}: {type(e).__name__}: {e}") from e
             else:
                 drawn = body
-            parts.append(ascii_expr(normalise_lines(drawn, cells, where), cells, halign, scale))
+            shown = normalise_lines(drawn, cells, where)
+            if "title" in titles:
+                # under the block, centred on what it actually drew rather
+                # than on the grid, so it sits with the chart not the page
+                drew = max(sum(len(t) for t, _ in segs) for segs in shown)
+                pad = max(0, (drew - len(titles["title"])) // 2)
+                shown = shown + [[(" ", "fg")], [(" " * pad + titles["title"], "dim")]]
+            expr = ascii_expr(shown, cells, halign, scale)
+            if "left-title" in titles:
+                add(f"left-title({q(titles['left-title'])}, {expr})")
+            else:
+                parts.append(expr)
             continue
 
         if RULE.match(line):

@@ -128,6 +128,33 @@
 // is one row of the grid, the height a line of characters takes.
 #let air(n) = v(n * 1.32em)
 
+// Blocks side by side, from a `::: row`. Each column arrives as its width
+// in characters and its content; the widths are counted in `ch`, so the
+// columns land on the same grid the characters do.
+#let row(..cols) = {
+  let items = cols.pos()
+  grid(
+    columns: items.map(it => it.at(0) * ch),
+    column-gutter: 2 * ch,
+    align: top,
+    ..items.map(it => it.at(1)),
+  )
+}
+
+// A title at a block's left, turned a quarter turn so it reads upward, the
+// way an axis is labelled. This is the one thing on a slide set as type
+// rather than drawn in characters: stacked letters would need a row each,
+// and a title of any length has more letters than a chart has rows.
+// The turned title and its gap are three characters wide, which is what
+// slides.py holds back from the block beside it (LEFT_TITLE there).
+#let left-title(words, body) = block(grid(
+  columns: (2.2 * ch, auto),
+  column-gutter: 0.8 * ch,
+  align: horizon,
+  rotate(-90deg, reflow: true, text(fill: theme.dim, words)),
+  body,
+))
+
 // A rule across the grid, from `---` on a line of its own.
 #let rule() = ascii((( ("─" * cfg.columns, "faint"), ),))
 
