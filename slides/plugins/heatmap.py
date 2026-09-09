@@ -32,19 +32,18 @@ import shlex
 
 import _draw
 
-# Every cell is solid, and what changes is the ink. Shading with ░ ▒ ▓ gave
-# only a handful of steps, and the difference between two of them read as a
-# change of texture rather than of quantity. A solid cell mixed a percentage
-# of the way from the page to its ink gives as many steps as are worth
-# telling apart, and the field reads as one surface. The lowest is held off
-# the ground so an empty-looking cell is still a cell.
-SHADES = 9
+# Every cell is solid, and what changes is the ink: each is mixed its own
+# share of the way from the page to the ink the deck is written in, so the
+# scale is as near continuous as the mixing is. Shading with ░ ▒ ▓ gave a
+# handful of steps and the difference between two of them read as a change
+# of texture rather than of quantity; binning those into nine was no better,
+# only greyer. The lowest is held off the ground so that a cell at the
+# bottom of the scale is still visibly a cell.
 FLOOR = 22
 
 
-def shade(step):
-    at = FLOOR + (100 - FLOOR) * step / (SHADES - 1)
-    return "█", f"shade-{round(at)}"
+def shade(fraction):
+    return "█", f"shade-{round(FLOOR + (100 - FLOOR) * fraction)}"
 
 # A square, in characters. The row pitch measured against the character
 # advance is 2.2 to 1 at any size, so two characters beside one row is as
@@ -82,9 +81,8 @@ def render(body, args, opts, width):
 
     def level(v):
         if hi <= lo:
-            return SHADES - 1
-        step = int((v - lo) / (hi - lo) * SHADES)
-        return max(0, min(SHADES - 1, step))
+            return 1.0
+        return max(0.0, min(1.0, (v - lo) / (hi - lo)))
 
     out = []
     if opts.get("names", "turned") == "flat":
