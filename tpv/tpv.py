@@ -17,11 +17,13 @@ notices the change and quietly re-renders. That is the loop this exists
 for: manuscript on the left, its pdf on the right, refreshing itself.
 
   tpv file.pdf
+  tpv -s file.pdf  slideshow: one page at a time, whole, centred
 
   j / k            a line or two down / up; counts work (5j)
+                   in slideshow, a whole page down / up
   ctrl-j / ctrl-k  down / up a full page; counts work
   gg  XXgg  G      start / page XX / end
-  z / x            zoom out / in
+  z / x            zoom out / in (not in slideshow: the fit is the mode)
   Z / X            zoom until the whole page fits / its width fills
   r                reload the file
   q                quit
@@ -105,8 +107,13 @@ def frame_escape(canvas, cols, rows, quality=92):
     )
 
 class Tpv:
-    def __init__(self, path):
+    def __init__(self, path, slideshow=False):
         self.path = os.path.abspath(path)
+        # Slideshow holds a page number where scrolling holds an offset:
+        # there is no position between pages to be in, so self.scroll is
+        # left at each page's top and self.page is the truth.
+        self.slideshow = slideshow
+        self.page = 0
         self.cell_w, self.cell_h = CELL_W, CELL_H
         self.cell_measured = False
         self.faded = theme()
@@ -169,31 +176,52 @@ class Tpv:
 
     def viewport(self):
         size = shutil.get_terminal_size()
-        # the page, then a blank line's breath, then the status line
-        cols, rows = size.columns, size.lines - 2
+        if self.slideshow:
+            # no status line, so the page takes every row but the last:
+            # the cursor has to rest somewhere after the image, and an
+            # image reaching the final row scrolls the screen and loses
+            # its own top row.
+            rows = size.lines - 1
+        else:
+            # the page, then a blank line's breath, then the status line
+            rows = size.lines - 2
+        cols = size.columns
         return cols, rows, cols * self.cell_w, rows * self.cell_h
 
     def page_at(self, y):
         return max(0, min(len(self.tops), bisect.bisect_right(self.tops, y)) - 1)
 
+    def current_page(self):
+        return self.page if self.slideshow else self.page_at(self.scroll)
+
     def clamp(self):
+        if self.slideshow:
+            self.page = max(0, min(len(self.tops) - 1, self.page))
+            self.scroll = self.tops[self.page]
+            return
         _, _, _, vh = self.viewport()
         limit = max(0.0, self.doc_h - vh / self.scale)
         self.scroll = max(0.0, min(limit, self.scroll))
 
     def fit_page(self):
+        if self.slideshow:
+            return  # the fit is the mode; there is nothing to set
         _, _, vw, vh = self.viewport()
         w, h = self.sizes[self.page_at(self.scroll)]
         self.scale = min(vw / w, vh / h)
         self.clamp()
 
     def fit_width(self):
+        if self.slideshow:
+            return
         _, _, vw, _ = self.viewport()
         w, _ = self.sizes[self.page_at(self.scroll)]
         self.scale = vw / w
         self.clamp()
 
     def zoom(self, factor):
+        if self.slideshow:
+            return
         _, _, _, vh = self.viewport()
         centre = self.scroll + vh / self.scale / 2
         self.scale = max(0.05, min(20.0, self.scale * factor))
@@ -227,7 +255,7 @@ class Tpv:
                 s = self.render_s
                 if s is None:
                     continue
-                cur = self.page_at(self.scroll)
+                cur = self.current_page()
                 for j in (cur + 1, cur - 1):
                     if 0 <= j < len(self.sizes) and (j, round(s, 4)) not in self.cache:
                         try:
@@ -240,6 +268,8 @@ class Tpv:
     def build_frame(self):
         # the viewport's pixels, assembled but not yet spoken for
         cols, rows, vw, vh = self.viewport()
+        if self.slideshow:
+            return self.build_slide(cols, rows, vw, vh)
         if self.scale is None:
             w, h = self.sizes[0]
             self.scale = min(vw / w, vh / h)
@@ -290,8 +320,38 @@ class Tpv:
 
         return canvas, cols, rows, vh
 
+    def build_slide(self, cols, rows, vw, vh):
+        # one page, scaled until it fits whole, centred on both axes. The
+        # scale is recomputed every frame rather than kept: pages can differ
+        # in size, and a resize must refit without being told.
+        w, h = self.sizes[self.page]
+        self.scale = min(vw / w, vh / h)
+        if self.cell_measured:
+            ov = 1.0
+        else:
+            ov = min(OVERSAMPLE, max(1.0, (MAX_CANVAS / (vw * vh)) ** 0.5))
+        s = self.scale * ov
+        self.render_s = s
+        cw, ch = int(vw * ov), int(vh * ov)
+        img = self.page_image(self.page, s)
+        iw, ih = img.size
+        # the margin around the page is transparent for the same reason the
+        # gutter is: the terminal composites its own ground behind it
+        canvas = Image.new("LA" if self.gray else "RGBA", (cw, ch))
+        canvas.paste(img.crop((0, 0, min(iw, cw), min(ih, ch))),
+                     (max(0, (cw - iw) // 2), max(0, (ch - ih) // 2)))
+        return canvas, cols, rows, vh
+
     def frame_string(self, sharp=True):
         canvas, cols, rows, vh = self.build_frame()
+        if self.slideshow:
+            # the page alone. The cursor is left on the spare last row,
+            # which is why the image stops short of it.
+            return (
+                f"{ESC}[?2026h{ESC}[2J{ESC}[H"
+                + frame_escape(canvas, cols, rows, quality=92 if sharp else 85)
+                + f"{ESC}[{rows + 1};1H{ESC}[?2026l"
+            )
         # the name of the file and the page number, nothing else: faded ink
         # on whatever the terminal's ground already is
         centre = self.scroll + vh / self.scale / 2
@@ -314,16 +374,25 @@ class Tpv:
     def state_key(self):
         # everything a drawn frame depends on; a prediction is only good
         # while this has not moved underneath it
-        return (round(self.scroll, 3), self.scale, self.mtime, shutil.get_terminal_size())
+        return (round(self.scroll, 3), self.page, self.scale, self.mtime,
+                shutil.get_terminal_size())
 
     # -- movement ----------------------------------------------------------
 
     def step(self, direction, n=1):
-        # a line or two of the terminal per j or k, times any count
+        # a line or two of the terminal per j or k, times any count - or a
+        # whole page each, in slideshow, where there is no partial position
+        if self.slideshow:
+            self.page += direction * int(n)
+            self.clamp()
+            return
         self.scroll += direction * n * (LINE * self.cell_h / self.scale)
         self.clamp()
 
     def page_step(self, direction, n=1):
+        if self.slideshow:
+            self.step(direction, n)
+            return
         cur = self.page_at(self.scroll)
         if direction > 0:
             target = min(cur + n, len(self.tops) - 1)
@@ -335,7 +404,9 @@ class Tpv:
         self.clamp()
 
     def goto_page(self, number):
-        self.scroll = self.tops[max(0, min(len(self.tops) - 1, number - 1))]
+        target = max(0, min(len(self.tops) - 1, number - 1))
+        self.page = target
+        self.scroll = self.tops[target]
         self.clamp()
 
 if os.name == "nt":
@@ -480,10 +551,12 @@ def measure_cell(con):
 
 def main():
     args = sys.argv[1:]
+    slideshow = "-s" in args
+    args = [a for a in args if a != "-s"]
     if len(args) != 1:
         raise SystemExit(1)  # the keys are in the docstring above, not on screen
 
-    tpv = Tpv(args[0])
+    tpv = Tpv(args[0], slideshow=slideshow)
     con = ConsoleInput() if os.name == "nt" else TerminalInput()
     if os.name != "nt":
         tpv.faded = theme(con.appearance())
@@ -585,7 +658,7 @@ def main():
                     and not pending_g
                     and predicted[0] == tpv.state_key()
                 ):
-                    _, tpv.scroll, frame = predicted
+                    _, (tpv.scroll, tpv.page), frame = predicted
                     predicted = None
                     sys.stdout.write(frame)
                     sys.stdout.flush()
@@ -595,10 +668,15 @@ def main():
                 for ch, repeat, down in events:
                     if not down:
                         # a released scroll key stops the view instantly
-                        if ch in ("j", "k") and debt:
+                        if ch in ("j", "k") and debt and not tpv.slideshow:
                             stop(0.05)
                         continue
-                    if ch in ("j", "k") and not count and not pending_g:
+                    if (
+                        ch in ("j", "k")
+                        and not tpv.slideshow
+                        and not count
+                        and not pending_g
+                    ):
                         # bare scrolling joins the cruise rather than
                         # painting per arrival
                         d = 1 if ch == "j" else -1
@@ -664,12 +742,12 @@ def main():
                 # advance, so the next tap paints in the time of a write
                 if predicted is None and settle_at is None and now - quiet_since > 0.2:
                     origin = tpv.state_key()
-                    before = tpv.scroll
+                    before = (tpv.scroll, tpv.page)
                     tpv.step(1)
-                    if tpv.scroll != before:
+                    if (tpv.scroll, tpv.page) != before:
                         frame = tpv.frame_string(sharp=True)
-                        predicted = (origin, tpv.scroll, frame)
-                    tpv.scroll = before
+                        predicted = (origin, (tpv.scroll, tpv.page), frame)
+                    tpv.scroll, tpv.page = before
                 time.sleep(0.003)
                 if now - last_check > 0.5:
                     last_check = now
