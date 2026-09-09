@@ -95,7 +95,9 @@ left 2
 :::
 
 `::: row` splits the grid between its columns, a blank line starting each
-one. `title=` goes under a block; `left-title=` stands at its left, turned.
+one. add `centre` and the columns shrink to what they hold and sit together
+in the middle. `title=` goes under a block; `left-title=` stands at its
+left, turned.
 
 === section
 

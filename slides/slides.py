@@ -65,7 +65,12 @@ between the columns with two characters between them. A blank line starts
 the next column, so two charts with a line between them are two columns;
 wrap several blocks in a `::: left` to keep them in one column. Numbers on
 the line are the columns' shares, so `::: row 2 1` makes the first twice
-the width of the second. These wrappers nest.
+the width of the second.
+
+`::: row centre` (or `right`) draws each column only as wide as what it
+holds and puts the group where it says, rather than spreading the columns
+across the grid. The shares still say how much room each column has to
+draw into. These wrappers nest.
 
 Plugins live in plugins/ beside this file; the file's name is the fence
 language. One exposes
@@ -400,16 +405,24 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                 groups = columns_of(inner)
                 if not groups:
                     raise DeckError(f"slide {number}: a ::: row with nothing in it")
+                sides = [r for r in rest if r.lower() in ALIGNS]
+                if len(sides) > 1:
+                    raise DeckError(f"slide {number}: a ::: row takes one side, not "
+                                    f"{' '.join(sides)}")
                 try:
-                    weights = [float(r) for r in rest]
+                    weights = [float(r) for r in rest if r.lower() not in ALIGNS]
                 except ValueError:
                     raise DeckError(f"slide {number}: a ::: row takes numbers for the "
                                     f"columns' shares, not {' '.join(rest)!r}")
+                side = ALIGNS[sides[0].lower()] if sides else "left"
                 cols = []
                 for group, share in zip(groups, shares(weights, len(groups), width, number)):
                     inside = parse_slide(group, plugins, share, number, "left", has_title)
                     cols.append(f"({share}, ({', '.join(inside)},).join())")
-                add("row(" + ", ".join(cols) + ")")
+                expr = f"row(side: {q(side)}, " + ", ".join(cols) + ")"
+                # a row that says where it sits places itself; anything it is
+                # wrapped in has no say, since the row fills the grid otherwise
+                parts.append(expr) if sides else add(expr)
             else:
                 parts.extend(parse_slide(inner, plugins, width, number, ALIGNS[word], has_title))
             has_title = has_title or any(HEADING.match(l) and HEADING.match(l).group(1) == "#"

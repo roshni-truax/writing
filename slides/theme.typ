@@ -29,8 +29,10 @@
 // smaller and hands the block proportionally more characters to fill the
 // same width. Every measure here is taken from the block's own size, so a
 // small block is the same drawing on a finer grid.
+// The block takes the width of what it draws, not of the page. A column in
+// a `::: row` is sized to its content, and a block claiming the full width
+// would leave every column as wide as the room it was offered.
 #let ascii(lines, scale: 1.0) = block(
-  width: 100%,
   {
     let cell = 0.6 * scale * cfg.size
     set text(size: scale * cfg.size, top-edge: "ascender", bottom-edge: "descender")
@@ -131,14 +133,22 @@
 // Blocks side by side, from a `::: row`. Each column arrives as its width
 // in characters and its content; the widths are counted in `ch`, so the
 // columns land on the same grid the characters do.
-#let row(..cols) = {
+// `side` is where the row sits. Left spreads the columns across the grid at
+// the widths they were given, which is what makes a row a layout. Centre and
+// right draw each column only as wide as what it holds and put the group
+// where asked, since a row filling the grid cannot be centred within it.
+#let row(side: "left", ..cols) = {
   let items = cols.pos()
-  grid(
-    columns: items.map(it => it.at(0) * ch),
+  let spread = side == "left"
+  let g = grid(
+    columns: items.map(it => if spread { it.at(0) * ch } else { auto }),
     column-gutter: 2 * ch,
     align: top,
     ..items.map(it => it.at(1)),
   )
+  if side == "centre" { align(center, g) }
+  else if side == "right" { align(right, g) }
+  else { g }
 }
 
 // A title at a block's left, turned a quarter turn so it reads upward, the
