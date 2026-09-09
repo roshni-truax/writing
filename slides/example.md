@@ -112,7 +112,8 @@ evening       7   3   0   2   5   1   0
 the first line names the columns, and each line after it is a row. the
 column names are turned because a column is a few characters wide; the row
 names stay flat, where there is room for them. `size` counts the squares a
-cell is drawn from, one being two characters beside one row.
+cell is drawn from, one being two characters beside one row, and the nine
+shades run from just off the page to the ink it is written in.
 
 === section
 

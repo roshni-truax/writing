@@ -76,8 +76,10 @@ language. One exposes
 
   def render(body: str, args: list[str], opts: dict[str, str], width: int) -> list
 
-and returns the lines to draw, each a str or a list of (text, tone) pairs,
-tone being "fg", "dim" or "faint". `width` is the grid width in characters.
+and returns the lines to draw, each a str or a list of (text, tone) pairs.
+A tone is "fg", "dim" or "faint", or "shade-N" for N percent of the way
+from the page to its ink, which is how a field is shaded in more steps than
+three. `width` is the grid width in characters.
 For ```chart bar height=6``` the args are ["bar"] and opts {"height": "6"}.
 
 A plugin that wants names above its columns, turned a quarter turn the way
@@ -99,6 +101,7 @@ import sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))  # through the symlink on the nas
 TONES = ("fg", "dim", "faint")
+SHADE = re.compile(r"^shade-(\d{1,3})$")  # a tone by the percent it is mixed at
 SMALL = 0.8  # the type size of a block whose fence says `small`
 DEFAULTS = {"theme": "dark", "size": "13pt", "columns": "72", "font": "JetBrainsMono NFM",
             "aspect": "16:9", "progress": "false"}
@@ -134,8 +137,10 @@ def normalise_lines(lines, width, where):
     for i, line in enumerate(lines):
         segs = [(line, "fg")] if isinstance(line, str) else [tuple(s) for s in line]
         for text, tone in segs:
-            if tone not in TONES:
-                raise DeckError(f"{where}: unknown tone {tone!r} (use fg, dim or faint)")
+            shade = SHADE.match(tone)
+            if tone not in TONES and not (shade and int(shade.group(1)) <= 100):
+                raise DeckError(f"{where}: unknown tone {tone!r} (use fg, dim, faint, "
+                                f"or shade-0 to shade-100)")
         if sum(len(t) for t, _ in segs) > width:
             print(f"warning: {where}: line {i + 1} is wider than {width} columns and will wrap",
                   file=sys.stderr)

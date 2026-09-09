@@ -14,7 +14,18 @@
   light: (bg: rgb("#EEEEEE"), fg: rgb("#353535"), dim: rgb("#5C5C5C"), faint: rgb("#B8B5B5")),
 )
 #let theme = palettes.at(cfg.theme)
-#let tone(name) = theme.at(name)
+
+// A tone is one of the three the deck writes in, or `shade-N`: N percent of
+// the way from the page's ground to its ink. That is how a plugin shades a
+// field in more steps than three, and it comes out right either way round,
+// since on a light page the ink is the dark end. The mixing is done in oklab
+// so the steps look evenly spaced rather than merely being evenly numbered.
+#let tone(name) = if name.starts-with("shade-") {
+  let t = int(name.slice(6)) * 1%
+  color.mix((theme.bg, 100% - t), (theme.fg, t), space: oklab)
+} else {
+  theme.at(name)
+}
 
 // JetBrains Mono's advance is 0.6em, so this is the width of one character.
 #let ch = 0.6 * cfg.size

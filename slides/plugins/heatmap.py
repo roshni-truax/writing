@@ -26,17 +26,25 @@ options
   size=1        how many squares across and down each cell is drawn
   min=  max=    the ends of the scale, if not the smallest and largest
   names=flat    column names written across the top instead of turned
-  legend=off    drop the scale under the grid
 """
 
 import shlex
 
 import _draw
 
-# Low to high. A cell carries one character, so the scale is the ink in it:
-# a quarter of the cell at the faintest, then the same quarter, a half, three
-# quarters and the whole of it in the text's own ink.
-LEVELS = (("░", "faint"), ("░", "fg"), ("▒", "fg"), ("▓", "fg"), ("█", "fg"))
+# Every cell is solid, and what changes is the ink. Shading with ░ ▒ ▓ gave
+# only a handful of steps, and the difference between two of them read as a
+# change of texture rather than of quantity. A solid cell mixed a percentage
+# of the way from the page to its ink gives as many steps as are worth
+# telling apart, and the field reads as one surface. The lowest is held off
+# the ground so an empty-looking cell is still a cell.
+SHADES = 9
+FLOOR = 22
+
+
+def shade(step):
+    at = FLOOR + (100 - FLOOR) * step / (SHADES - 1)
+    return "█", f"shade-{round(at)}"
 
 # A square, in characters. The row pitch measured against the character
 # advance is 2.2 to 1 at any size, so two characters beside one row is as
@@ -74,32 +82,20 @@ def render(body, args, opts, width):
 
     def level(v):
         if hi <= lo:
-            return len(LEVELS) - 1
-        step = int((v - lo) / (hi - lo) * len(LEVELS))
-        return max(0, min(len(LEVELS) - 1, step))
+            return SHADES - 1
+        step = int((v - lo) / (hi - lo) * SHADES)
+        return max(0, min(SHADES - 1, step))
 
     out = []
     if opts.get("names", "turned") == "flat":
         out.append([(" " * indent + "".join(n[:across].center(across) for n in columns), "dim")])
     for name, values in data:
-        shades = [LEVELS[level(v)] for v in values]
+        shades = [shade(level(v)) for v in values]
         for row in range(size):  # a cell is `size` rows tall as well as wide
             label = name.rjust(label_w) if row == (size - 1) // 2 else " " * label_w
             segs = [(label + " ", "fg")] if indent else []
             segs += [(character * across, tone) for character, tone in shades]
             out.append(segs)
-
-    if opts.get("legend", "on") != "off":
-        # the swatches are drawn at the size of a cell so the scale looks
-        # like the grid, unless that would run the line past the grid
-        low, high = _draw.fmt(lo), _draw.fmt(hi)
-        room = width - indent - len(low) - len(high) - 2
-        swatch = max(1, min(across, room // len(LEVELS)))
-        out.append([(" ", "fg")])
-        segs = [(" " * indent + low + " ", "dim")]
-        segs += [(character * swatch, tone) for character, tone in LEVELS]
-        segs.append((" " + high, "dim"))
-        out.append(segs)
 
     if opts.get("names", "turned") == "flat":
         return out
