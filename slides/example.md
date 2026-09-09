@@ -4,7 +4,7 @@ theme: dark
 progress: true
 ---
 
-=== centre
+=== center
 
 # an example deck
 
@@ -95,8 +95,7 @@ left 2
 :::
 
 `::: row` splits the grid between its columns, a blank line starting each
-one. add `centre` and the columns shrink to what they hold and sit together
-in the middle. `title=` goes under a block; `left-title=` stands at its
+one. add `center` and the whole row moves over as one piece. `title=` goes under a block; `left-title=` stands at its
 left, turned.
 
 === section
@@ -147,8 +146,8 @@ two are rows of air.
 
 sits at the foot of the page.
 
-::: centre
-this paragraph and the chart under it are centred as blocks: the lines
+::: center
+this paragraph and the chart under it are centered as blocks: the lines
 of the paragraph stay left-aligned to one another, and the chart moves
 by whole columns.
 
@@ -159,6 +158,6 @@ three 2
 ```
 :::
 
-=== end centre
+=== end center
 
 # the end

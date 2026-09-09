@@ -40,7 +40,7 @@
     // Block elements (█ ▌ ▁ ░ and the rest of U+2580-259F) meet edge to
     // edge, and every renderer leaves a hairline where two shapes share a
     // pixel: each covers half of it, and half over half is not whole. So
-    // each block glyph is drawn 5% larger, centred on its cell, over an
+    // each block glyph is drawn 5% larger, centered on its cell, over an
     // invisible copy that holds the cell's place on the grid. Neighbours
     // then overlap by a fraction of a point and the fill reads as one shape.
     show regex("[\u{2580}-\u{259F}]"): it => box(width: cell, {
@@ -87,7 +87,7 @@
 #set enum(indent: 2 * ch, body-indent: ch)
 
 // A slide is a page. Content sits at the top unless the `===` before the
-// slide says centre or bottom. `footer` is the footer line's segments, or
+// slide says center or bottom. `footer` is the footer line's segments, or
 // none for the slide number alone.
 //
 // The body is measured first. Typst would otherwise let a slide that does
@@ -107,7 +107,7 @@
             + "split it at a ===, or set a block `small`")
     }
   }
-  if align == "centre" { v(1fr); body; v(1fr) }
+  if align == "center" { v(1fr); body; v(1fr) }
   else if align == "bottom" { v(1fr); body }
   else { body }
 }
@@ -133,22 +133,31 @@
 // Blocks side by side, from a `::: row`. Each column arrives as its width
 // in characters and its content; the widths are counted in `ch`, so the
 // columns land on the same grid the characters do.
-// `side` is where the row sits. Left spreads the columns across the grid at
-// the widths they were given, which is what makes a row a layout. Centre and
-// right draw each column only as wide as what it holds and put the group
-// where asked, since a row filling the grid cannot be centred within it.
+// `side` is where the row sits. The columns keep the widths they were given
+// whatever it says, so the row is laid out once and then moved as one piece;
+// sizing the columns to their contents instead would rearrange the row while
+// claiming to center it, and squeeze a chart into wrapping.
+//
+// A row fills the grid, so there is nothing for `align` to do. What is moved
+// is the difference between the grid and the ink: every column but the last
+// is followed by another, so only the last one's unused tail is slack.
 #let row(side: "left", ..cols) = {
   let items = cols.pos()
-  let spread = side == "left"
   let g = grid(
-    columns: items.map(it => if spread { it.at(0) * ch } else { auto }),
+    columns: items.map(it => it.at(0) * ch),
     column-gutter: 2 * ch,
     align: top,
     ..items.map(it => it.at(1)),
   )
-  if side == "centre" { align(center, g) }
-  else if side == "right" { align(right, g) }
-  else { g }
+  if side == "left" { g } else {
+    layout(room => {
+      let last = items.last()
+      let drawn = calc.min(measure(last.at(1)).width, last.at(0) * ch)
+      let ink = items.slice(0, -1).map(it => (it.at(0) + 2) * ch).sum(default: 0pt) + drawn
+      let slack = calc.max(room.width - ink, 0pt)
+      move(dx: if side == "center" { slack / 2 } else { slack }, g)
+    })
+  }
 }
 
 // A title at a block's left, turned a quarter turn so it reads upward, the

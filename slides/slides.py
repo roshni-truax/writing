@@ -11,7 +11,7 @@ re-renders.
 Words after the `===` describe the slide that follows it (a deck may open
 with one, for its first slide):
 
-  === centre       content centred on the page instead of at the top
+  === center       content centered on the page instead of at the top
   === bottom       content at the foot of the page
   === start        the first slide the progress bar counts, and the
                    first of its sections
@@ -43,7 +43,7 @@ verbatim, unless its language names a plugin. Three words on a fence line
 say how the block is set, whatever drew it:
 
   small               smaller type on a finer grid, for a dense chart
-  title="..."         a line under the block, centred on what it drew
+  title="..."         a line under the block, centered on what it drew
   left-title="..."    at its left, turned a quarter turn, and set as type
 
 A chart whose bars stand up usually wants `title=`, and one whose bars run
@@ -54,7 +54,7 @@ that adds a row of the grid, so air is added by leaving it. Blank lines at
 the start and end of a slide, around the `===`, are ignored. A line ending
 in a backslash breaks the line where it stands, without the gap.
 
-Anything between `::: centre` and `:::` on lines of their own is centred
+Anything between `::: center` and `:::` on lines of their own is centered
 across the page (`::: right` for the other side). Everything moves as a
 block: a paragraph's lines stay left-aligned to one another and the widest
 sets the block's width; something drawn in characters moves by whole
@@ -67,10 +67,9 @@ wrap several blocks in a `::: left` to keep them in one column. Numbers on
 the line are the columns' shares, so `::: row 2 1` makes the first twice
 the width of the second.
 
-`::: row centre` (or `right`) draws each column only as wide as what it
-holds and puts the group where it says, rather than spreading the columns
-across the grid. The shares still say how much room each column has to
-draw into. These wrappers nest.
+`::: row center` (or `right`) moves the whole row over, as one piece: the
+columns keep their widths, and what moves is the room the last column did
+not use. These wrappers nest.
 
 Plugins live in plugins/ beside this file; the file's name is the fence
 language. One exposes
@@ -95,7 +94,7 @@ TONES = ("fg", "dim", "faint")
 SMALL = 0.8  # the type size of a block whose fence says `small`
 DEFAULTS = {"theme": "dark", "size": "13pt", "columns": "72", "font": "JetBrainsMono NFM",
             "aspect": "16:9", "progress": "false"}
-WORDS = {"centre", "center", "bottom", "start", "section", "end"}
+WORDS = {"center", "centre", "bottom", "start", "section", "end"}  # centre is taken too
 
 
 class DeckError(Exception):
@@ -179,7 +178,7 @@ def ascii_expr(lines, width=None, halign="left", scale=1.0):
     """`width` and `halign` shift the block as one, by whole columns."""
     if halign != "left" and width:
         widest = max(sum(len(t) for t, _ in segs) for segs in lines)
-        pad = max(0, width - widest) // (2 if halign == "centre" else 1)
+        pad = max(0, width - widest) // (2 if halign == "center" else 1)
         lines = [[(" " * pad, "fg")] + segs for segs in lines]
     rows = []
     for segs in lines:
@@ -199,7 +198,7 @@ DIV_OPEN = re.compile(r"^:{3,}\s*(\S+)((?:\s+\S+)*)\s*$")
 GUTTER = 2      # characters between the columns of a `::: row`
 LEFT_TITLE = 3  # characters a turned title and its gap take at a block's left
 DIV_CLOSE = re.compile(r"^:{3,}\s*$")
-ALIGNS = {"centre": "centre", "center": "centre", "right": "right", "left": "left"}
+ALIGNS = {"center": "center", "centre": "center", "right": "right", "left": "left"}
 
 
 def close_div(lines, start):
@@ -317,7 +316,7 @@ def table(rows, width):
     if len(cells) > 1 and TABLE_SEP.match(rows[1]):
         for spec in cells[1]:
             aligns.append("right" if spec.endswith(":") and not spec.startswith(":")
-                          else "centre" if spec.startswith(":") and spec.endswith(":") else "left")
+                          else "center" if spec.startswith(":") and spec.endswith(":") else "left")
         body = [cells[0]] + cells[2:]
     ncol = max(len(r) for r in body)
     body = [r + [""] * (ncol - len(r)) for r in body]
@@ -329,7 +328,7 @@ def table(rows, width):
     def fit(text, c):
         if aligns[c] == "right":
             return text.rjust(widths[c])
-        if aligns[c] == "centre":
+        if aligns[c] == "center":
             return text.center(widths[c])
         return text.ljust(widths[c])
 
@@ -369,7 +368,7 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
     parts = []
     i = 0
     paragraph = []
-    aligned = {"centre": "center", "right": "right"}.get(halign)
+    aligned = {"center": "center", "right": "right"}.get(halign)
 
     def add(expr):
         # as a block: the box shrinks to the widest line, the lines inside
@@ -395,7 +394,7 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
             word = div.group(1).lower()
             rest = div.group(2).split()
             if word != "row" and word not in ALIGNS:
-                raise DeckError(f"slide {number}: ::: takes centre, right, left or row, "
+                raise DeckError(f"slide {number}: ::: takes center, right, left or row, "
                                 f"not {word!r}")
             end = close_div(lines, i + 1)
             if end is None:
@@ -465,7 +464,7 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                 drawn = body
             shown = normalise_lines(drawn, cells, where)
             if "title" in titles:
-                # under the block, centred on what it actually drew rather
+                # under the block, centered on what it actually drew rather
                 # than on the grid, so it sits with the chart not the page
                 drew = max(sum(len(t) for t, _ in segs) for segs in shown)
                 pad = max(0, (drew - len(titles["title"])) // 2)
@@ -618,7 +617,7 @@ def build(text, plugins):
     lines_below = footers(slides, columns, meta["progress"].lower() in ("true", "yes", "on"))
     for n, ((words, lines), footer) in enumerate(zip(slides, lines_below), 1):
         parts = parse_slide(lines, plugins, columns, n)
-        align = "centre" if words & {"centre", "center"} else "bottom" if "bottom" in words else "top"
+        align = "center" if words & {"center", "centre"} else "bottom" if "bottom" in words else "top"
         footer_expr = "none" if footer is None else "(" + ", ".join(
             f"({q(t)}, {q(tone)})" for t, tone in footer) + ",)"
         out.append(f"#slide(number: {n}, align: {q(align)}, footer: {footer_expr},\n  "
