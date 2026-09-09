@@ -8,7 +8,7 @@ progress: true
 
 # an example deck
 
-## everything slides reads, on nine pages
+## everything slides reads, on eleven pages
 
 === start
 
@@ -97,6 +97,22 @@ left 2
 `::: row` splits the grid between its columns, a blank line starting each
 one. add `center` and the whole row moves over as one piece. `title=` goes under a block; `left-title=` stands at its
 left, turned.
+
+===
+
+# when the writing happens
+
+```heatmap size=2
+             mon tue wed thu fri sat sun
+morning       3   5   2   8   1   6   4
+afternoon     1   0   4   6   2   3   7
+evening       7   3   0   2   5   1   0
+```
+
+the first line names the columns, and each line after it is a row. the
+column names are turned because a column is a few characters wide; the row
+names stay flat, where there is room for them. `size` counts the squares a
+cell is drawn from, one being two characters beside one row.
 
 === section
 

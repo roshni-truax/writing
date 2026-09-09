@@ -174,6 +174,23 @@
   body,
 ))
 
+// Names above a block's columns, each turned a quarter turn, from a plugin
+// that asked for them. `indent` is where the first column starts and `step`
+// how wide one is, both in characters, so a name sits over its own column.
+// Turned rather than flat because a column is a few characters wide and the
+// names would otherwise run together; the row names opposite stay flat,
+// since a row is one character tall and a name turned there has nowhere to
+// go.
+#let turned-names(indent, step, names, body) = {
+  block(below: 0.5em, grid(
+    columns: (indent * ch,) + names.map(_ => step * ch),
+    align: bottom + center,
+    [],
+    ..names.map(n => rotate(-90deg, reflow: true, text(fill: theme.dim, n))),
+  ))
+  body
+}
+
 // A rule across the grid, from `---` on a line of its own.
 #let rule() = ascii((( ("─" * cfg.columns, "faint"), ),))
 

@@ -79,6 +79,14 @@ language. One exposes
 and returns the lines to draw, each a str or a list of (text, tone) pairs,
 tone being "fg", "dim" or "faint". `width` is the grid width in characters.
 For ```chart bar height=6``` the args are ["bar"] and opts {"height": "6"}.
+
+A plugin that wants names above its columns, turned a quarter turn the way
+a heatmap's are, returns a dict instead:
+
+  {"lines": [...], "turned": {"indent": int, "step": int, "names": [str]}}
+
+`indent` is how many characters in the first column starts and `step` how
+wide each one is, so the names can be set over them.
 """
 
 import argparse
@@ -462,6 +470,9 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                     raise DeckError(f"{where}: {type(e).__name__}: {e}") from e
             else:
                 drawn = body
+            turned = None
+            if isinstance(drawn, dict):
+                turned, drawn = drawn.get("turned"), drawn["lines"]
             shown = normalise_lines(drawn, cells, where)
             if "title" in titles:
                 # under the block, centered on what it actually drew rather
@@ -470,6 +481,12 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                 pad = max(0, (drew - len(titles["title"])) // 2)
                 shown = shown + [[(" ", "fg")], [(" " * pad + titles["title"], "dim")]]
             expr = ascii_expr(shown, cells, halign, scale)
+            if turned:
+                # the offsets are in the block's own characters, which are
+                # narrower when the fence said `small`
+                names = ", ".join(q(n) for n in turned["names"])
+                expr = (f"turned-names({turned['indent'] * scale}, {turned['step'] * scale}, "
+                        f"({names},), {expr})")
             if "left-title" in titles:
                 add(f"left-title({q(titles['left-title'])}, {expr})")
             else:
