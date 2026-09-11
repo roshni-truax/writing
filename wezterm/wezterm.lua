@@ -160,7 +160,7 @@ config.keys = {
   { key = "b", mods = "ALT", action = act.EmitEvent("toggle-theme") },
 
   -- font size, without the window jumping about. On alt rather than ctrl:
-  -- ctrl+- and ctrl-+ belong to tpv (fit width, fit page), and a binding
+  -- ctrl+- and ctrl-+ belong to the viewer (fit width, fit page), and a binding
   -- here would fire alongside it - the terminal cannot yield a bound key
   -- to one program and keep it from another.
   { key = "=", mods = "ALT", action = act.IncreaseFontSize },

@@ -1,8 +1,8 @@
----
+```
 slides: true
 theme: dark
 progress: true
----
+```
 
 === center
 
@@ -81,7 +81,7 @@ block in smaller type on a finer grid, for a chart too dense for the page.
 # side by side, two shares to one
 
 ::: row 2 1
-```chart bar left-title="words a part"
+```chart bar
 part one 41200
 part two 38900
 part three 44100
@@ -95,14 +95,14 @@ left 2
 :::
 
 `::: row` splits the grid between its columns, a blank line starting each
-one. add `center` and the whole row moves over as one piece. `title=` goes under a block; `left-title=` stands at its
-left, turned.
+one. add `center` and the whole row moves over as one piece, and `title=`
+puts a line under a block, centered on what it drew.
 
 ===
 
 # when the writing happens
 
-```heatmap size=2
+```chart heatmap size=2
              mon tue wed thu fri sat sun
 morning       3   5   2   8   1   6   4
 afternoon     1   0   4   6   2   3   7
@@ -125,7 +125,7 @@ near continuous as the mixing is.
 (1,1) pandoc
 (2,1) typst
 (2,0) pdf
-(0,0) tpv
+(0,0) viewer
 (0,1) -> (1,1)
 (1,1) -> (2,1)
 (2,1) -> (2,0)

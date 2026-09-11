@@ -45,23 +45,31 @@ foreach ($l in $links) {
     Write-Host "  $($l.Name): $link -> $target"
 }
 
-# tpv, the pdf viewer, as a command. WindowsApps is on every user's PATH
-# already, so a two-line shim there pointing back into the repo makes
-# `tpv file.pdf` work in any shell, with the repo staying the only copy.
-$shim = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\tpv.cmd'
-Set-Content -LiteralPath $shim -Encoding ascii -Value @(
-    '@echo off'
-    "python `"$(Join-Path $repo 'tpv\tpv.py')`" %*"
-)
-Write-Host "  tpv: $shim -> $(Join-Path $repo 'tpv\tpv.py')"
+# printer, which makes the pdfs, and viewer, which reads them, as commands.
+# WindowsApps is on every user's PATH already, so a two-line shim there
+# pointing back into the repo makes `viewer file.pdf` work in any shell, with
+# the repo staying the only copy.
+foreach ($tool in 'viewer', 'printer') {
+    $script = Join-Path $repo "$tool\$tool.py"
+    $shim = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\$tool.cmd"
+    Set-Content -LiteralPath $shim -Encoding ascii -Value @(
+        '@echo off'
+        "python `"$script`" %*"
+    )
+    Write-Host "  $tool`: $shim -> $script"
+}
 
-# slides, the deck builder, the same way.
-$shim = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\slides.cmd'
-Set-Content -LiteralPath $shim -Encoding ascii -Value @(
-    '@echo off'
-    "python `"$(Join-Path $repo 'slides\slides.py')`" %*"
-)
-Write-Host "  slides: $shim -> $(Join-Path $repo 'slides\slides.py')"
+# Shims for names this repo no longer has: tpv, as the viewer was called
+# until 2026-09-09, and slides, which moved inside printer the same day and
+# is reached through it. One left on the path points at a file that has
+# moved, and fails with no clue why.
+foreach ($old in 'tpv', 'slides') {
+    $stale = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\$old.cmd"
+    if (Test-Path -LiteralPath $stale) {
+        Remove-Item -LiteralPath $stale
+        Write-Host "  removed the old $old shim"
+    }
+}
 
 # WezTerm reads ~\.wezterm.lua in preference to ~\.config\wezterm, so a
 # leftover there would silently win over the repo.

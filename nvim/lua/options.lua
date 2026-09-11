@@ -20,6 +20,13 @@ o.fillchars = { eob = " " } -- no tildes past the end of the buffer
 o.scrolloff = 8
 o.sidescrolloff = 8
 
+-- completion, which only lua/references.lua uses: a short list beside the
+-- word rather than a panel up the side of the screen, nothing inserted
+-- until it is chosen, and vim narrowing the list fuzzily as you type
+o.pumheight = 5             -- rows, so the popup stays a small inline tab
+o.completeopt = "menu,menuone,noinsert,fuzzy"
+o.shortmess:append("c")     -- no "match 1 of 33" in the message line
+
 -- writing
 o.spelllang = "en_us"
 o.spellcapcheck = ""        -- do not nag about capitals mid-sentence in drafts
@@ -27,7 +34,34 @@ o.conceallevel = 2          -- render-markdown hides the syntax it draws over
 
 -- behaviour people generally want
 o.mouse = "a"
-o.clipboard = "unnamedplus"
+o.clipboard = "unnamedplus" -- a plain y and p are the system clipboard
+
+-- Over ssh there is nothing on the far end to be that clipboard: the nas is
+-- headless and has no xclip or anything like it, so a yank went to the `+`
+-- register and stopped there. OSC 52 is an escape the terminal reads -
+-- neovim writes the text out, wezterm puts it on the desktop's clipboard,
+-- and nothing has to be installed on the nas. Neovim is supposed to reach
+-- for this itself when $SSH_TTY is set and finds no provider; measured, it
+-- does not, so it is said here.
+--
+-- The copy half only. Wezterm ignores requests to read the clipboard - "52
+-- | Manipulate clipboard | Requests to query the clipboard are ignored", in
+-- its own escape-sequence table - so nothing can hand the desktop's
+-- clipboard back, and no plugin changes that. Pasting from the desktop is
+-- wezterm's own ctrl+shift+v, which arrives as a bracketed paste and needs
+-- none of this. `"+p` falls back to the last yank, so it does the obvious
+-- thing rather than erroring.
+if vim.fn.has("win32") == 0 then
+  local osc52 = require("vim.ui.clipboard.osc52")
+  local function last_yank()
+    return { vim.fn.getreg('"', 1, true), vim.fn.getregtype('"') }
+  end
+  vim.g.clipboard = {
+    name = "osc52",
+    copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
+    paste = { ["+"] = last_yank, ["*"] = last_yank },
+  }
+end
 o.undofile = true           -- undo survives closing the file
 o.swapfile = false
 o.ignorecase = true

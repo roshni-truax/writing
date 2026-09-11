@@ -41,7 +41,9 @@ return {
         right_pad = 2,
       },
 
-      bullet = { icons = { "-", "-", "-", "-" } },
+      -- the same four the pdf sets, in the same order, so a list looks
+      -- like itself while it is being written; the plugin cycles them
+      bullet = { icons = { "•", "◦", "‣", "▪" } },
       quote = { icon = "|" },
       dash = { icon = "-" },
       checkbox = { enabled = false },

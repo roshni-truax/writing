@@ -22,22 +22,32 @@ kinds
                   dimmer
   scatter         `x y` rows as braille dots
   spark           one series as a single row of ▁▂▃▄▅▆▇█
+  heatmap         a grid of values, each cell shaded by how large it is:
+                  the first line names the columns, every line after it is
+                  a row's name and one number per column
 
 options
   height=8       rows for bar, line and scatter
   width=60       columns, if not the whole grid
   max=100        the top of the scale (min= for the bottom)
-  values=off     hide the figures on bar charts
-  axis=off       drop the axis and its labels on line and scatter
+  values=false   hide the figures on bar charts
+  axis=false     drop the axis and its labels on line and scatter
   bar=3          the width of a column in `bar vertical` (else its widest
                  label)
+  size=1         squares a heatmap's cell is drawn from; one square is two
+                 characters beside one row
+  names=flat     a heatmap's column names written across the top instead of
+                 turned a quarter turn
 """
 
 import re
+import shlex
 
 import _draw
+import frontmatter
 
-TONES = ("fg", "dim", "faint")
+from _draw import TONES
+
 BARS = 3  # numbers a bar row may carry
 
 
@@ -48,7 +58,7 @@ def series(body):
         line = line.strip()
         if not line or line.startswith("//"):
             continue
-        out.append([_draw.number(t) for t in re.split(r"[,\s]+", line) if t])
+        out.append([_draw.Number(t) for t in re.split(r"[,\s]+", line) if t])
     return out
 
 
@@ -59,8 +69,8 @@ def render(body, args, opts, width):
         kind = "bar horizontal"
     if kind not in KINDS:
         raise ValueError(f"unknown chart kind {kind!r}; one of {', '.join(KINDS)}")
-    lo = _draw.number(opts["min"]) if "min" in opts else None
-    hi = _draw.number(opts["max"]) if "max" in opts else None
+    lo = _draw.Number(opts["min"]) if "min" in opts else None
+    hi = _draw.Number(opts["max"]) if "max" in opts else None
     return KINDS[kind](body, opts, width, lo, hi)
 
 
@@ -77,7 +87,7 @@ def hbar(body, opts, width, lo, hi):
     data = _draw.rows(body, most=BARS)
     if not data:
         raise ValueError("no rows")
-    show_values = opts.get("values", "on") != "off"
+    show_values = frontmatter.switch(opts.get("values", "true"), "values")
     label_w = max(len(l) for l, _ in data)
     figures, fig_w = figure_columns(data, show_values)
     figure_w = sum(w + 1 for w in fig_w)
@@ -106,7 +116,7 @@ def bar(body, opts, width, lo, hi):
     if not data:
         raise ValueError("no rows")
     height = int(opts.get("height", 8))
-    show_values = opts.get("values", "on") != "off"
+    show_values = frontmatter.switch(opts.get("values", "true"), "values")
     n = len(data)
     figures, fig_w = figure_columns(data, show_values)
     # a column is as wide as its widest label or figure (three at least, or
@@ -131,20 +141,13 @@ def bar(body, opts, width, lo, hi):
             ch, tone = col[r]
             segs.append((ch * bar_w, tone))
             segs.append((" ", "fg"))
-        lines.append(trim_right(segs))
+        lines.append(_draw.trim_row(segs))
     lines.append([("─" * (slot * n - 1), "faint")])
     labels = ""
     for label, _ in data:
         labels += label[:bar_w].center(slot)
     lines.append([(labels.rstrip(), "dim")])
     return lines
-
-
-def trim_right(segs):
-    """The same segments with the trailing blank ones dropped."""
-    while segs and not segs[-1][0].strip():
-        segs.pop()
-    return segs or [(" ", "fg")]
 
 
 def _axis_labels(lo, hi, height):
@@ -156,10 +159,14 @@ def _axis_labels(lo, hi, height):
     return [l.rjust(w) for l in labels], w
 
 
-def _plot(points_by_series, opts, width, lo, hi, x_lo=None, x_hi=None):
-    """Series of (x, y) points on a braille canvas with an optional axis."""
+def _plot(points_by_series, draw, opts, width, lo, hi, x_lo=None, x_hi=None):
+    """Series of (x, y) points on a braille canvas with an optional axis.
+
+    `draw` is handed each series' canvas and its points in dots, and puts
+    them on it however that kind of chart does: a line joins them, a
+    scatter marks each one."""
     height = int(opts.get("height", 8))
-    axis = opts.get("axis", "on") != "off"
+    axis = frontmatter.switch(opts.get("axis", "true"), "axis")
     ys = [y for s in points_by_series for _, y in s]
     xs = [x for s in points_by_series for x, _ in s]
     lo, hi = _draw.scale(ys, lo, hi)
@@ -173,7 +180,7 @@ def _plot(points_by_series, opts, width, lo, hi, x_lo=None, x_hi=None):
     for canvas, points in zip(canvases, points_by_series):
         dots = [((x - x_lo) / (x_hi - x_lo) * (plot_w * 2 - 1),
                  (y - lo) / (hi - lo) * (height * 4 - 1)) for x, y in points]
-        yield canvas, dots
+        draw(canvas, dots)
     # merge: a later (dimmer) series never paints over an earlier one
     rendered = [c.render() for c in canvases]
     lines = []
@@ -183,35 +190,17 @@ def _plot(points_by_series, opts, width, lo, hi, x_lo=None, x_hi=None):
             segs.append((labels[r] + " ", "dim"))
             segs.append(("│", "faint"))
         # per cell, the first series with a dot there wins its tone
-        run, run_tone = "", None
+        cells = []
         for c in range(plot_w):
-            tone = "faint"
-            ch = "⠀"
-            for s, rows in enumerate(rendered):
+            cell = ("⠀", "faint")
+            for i, rows in enumerate(rendered):
                 if rows[r][c] != "⠀":
-                    ch, tone = rows[r][c], TONES[min(s, 2)]
+                    cell = (rows[r][c], TONES[min(i, 2)])
                     break
-            if tone != run_tone and run:
-                segs.append((run, run_tone))
-                run = ""
-            run += ch
-            run_tone = tone
-        if run:
-            segs.append((run, run_tone))
-        lines.append(segs)
+            cells.append(cell)
+        lines.append(segs + _draw.segments(cells))
     if axis:
         lines.append([(" " * (label_w + 1) + "└" + "─" * plot_w, "faint")])
-    yield lines
-
-
-def _run(gen, draw):
-    """Drive _plot: it yields each canvas with its dots, then the lines."""
-    lines = None
-    for item in gen:
-        if isinstance(item, tuple):
-            draw(*item)
-        else:
-            lines = item
     return lines
 
 
@@ -228,7 +217,7 @@ def line(body, opts, width, lo, hi):
         if len(dots) == 1:
             canvas.dot(*dots[0])
 
-    return _run(_plot(points, opts, width, lo, hi, 0, max(longest, 1)), draw)
+    return _plot(points, draw, opts, width, lo, hi, 0, max(longest, 1))
 
 
 def scatter(body, opts, width, lo, hi):
@@ -244,7 +233,7 @@ def scatter(body, opts, width, lo, hi):
         for d in dots:
             canvas.dot(*d)
 
-    return _run(_plot([pts], opts, width, lo, hi), draw)
+    return _plot([pts], draw, opts, width, lo, hi)
 
 
 def spark(body, opts, width, lo, hi):
@@ -259,5 +248,78 @@ def spark(body, opts, width, lo, hi):
     return lines
 
 
+
+
+# --- heatmap ------------------------------------------------------------------
+#
+# Every cell is solid, and what changes is the ink: each is mixed its own
+# share of the way from the page to the ink the deck is written in, so the
+# scale is as near continuous as the mixing is. Shading with ░ ▒ ▓ gave a
+# handful of steps and the difference between two of them read as a change
+# of texture rather than of quantity; binning those into nine was no better,
+# only greyer. The lowest is held off the ground so that a cell at the
+# bottom of the scale is still visibly a cell.
+FLOOR = 22
+
+# A square, in characters. The row pitch measured against the character
+# advance is 2.2 to 1 at any size, so two characters beside one row is as
+# near square as this grid comes, and `size` counts squares from there.
+SQUARE = 2
+
+
+def shade(fraction):
+    return "█", f"shade-{round(FLOOR + (100 - FLOOR) * fraction)}"
+
+
+def heatmap(body, opts, width, lo, hi):
+    lines = [l for l in body.split("\n") if l.strip() and not l.strip().startswith("//")]
+    if len(lines) < 2:
+        raise ValueError("a heatmap wants a line of column names and a line for each row")
+    columns = shlex.split(lines[0])
+    if not columns:
+        raise ValueError("the first line names the columns")
+
+    data = _draw.rows("\n".join(lines[1:]), most=len(columns))
+    for name, values in data:
+        if len(values) != len(columns):
+            raise ValueError(f"{len(columns)} columns but {len(values)} numbers on the "
+                             f"{name or 'first'} row")
+
+    size = int(opts.get("size", 1))
+    if size < 1:
+        raise ValueError("a cell is at least one square")
+    across = SQUARE * size
+    label_w = max(len(name) for name, _ in data)
+    indent = label_w + 1 if label_w else 0
+    if indent + across * len(columns) > width:
+        raise ValueError(f"{len(columns)} cells of {size} do not fit in {width} "
+                         f"characters; try a smaller size or `small`")
+
+    every = [v for _, values in data for v in values]
+    lo = min(every) if lo is None else lo
+    hi = max(every) if hi is None else hi
+
+    def level(v):
+        if hi <= lo:
+            return 1.0
+        return max(0.0, min(1.0, (v - lo) / (hi - lo)))
+
+    out = []
+    flat = opts.get("names", "turned") == "flat"
+    if flat:
+        out.append([(" " * indent + "".join(n[:across].center(across) for n in columns), "dim")])
+    for name, values in data:
+        shades = [shade(level(v)) for v in values]
+        for row in range(size):  # a cell is `size` rows tall as well as wide
+            label = name.rjust(label_w) if row == (size - 1) // 2 else " " * label_w
+            segs = [(label + " ", "fg")] if indent else []
+            segs += [(character * across, tone) for character, tone in shades]
+            out.append(segs)
+
+    if flat:
+        return out
+    return _draw.turned(out, indent, across, columns)
+
+
 KINDS = {"bar horizontal": hbar, "bar vertical": bar, "line": line, "scatter": scatter,
-         "spark": spark}
+         "spark": spark, "heatmap": heatmap}

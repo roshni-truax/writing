@@ -1,4 +1,4 @@
-"""tpv - a terminal pdf viewer.
+"""viewer - a pdf viewer that runs in the terminal.
 
 Rolled here because nothing else runs on Windows: every existing terminal
 pdf viewer leans on unix plumbing (pixel-size ioctls, shared memory) that
@@ -12,12 +12,12 @@ frames travel as they are.
 
 The document is one continuous scroll, the way a manuscript reads, not a
 stack of screens. The pdf is read into memory and the file handle released
-at once, so an export can overwrite the file while it is on screen; tpv
-notices the change and quietly re-renders. That is the loop this exists
-for: manuscript on the left, its pdf on the right, refreshing itself.
+at once, so an export can overwrite the file while it is on screen; the
+viewer notices the change and quietly re-renders. That is the loop this
+exists for: manuscript on the left, its pdf on the right, refreshing itself.
 
-  tpv file.pdf
-  tpv -s file.pdf  slideshow: one page at a time, whole, centred
+  viewer file.pdf
+  viewer -s file.pdf  slideshow: one page at a time, whole, centred
 
   j / k            a line or two down / up; counts work (5j)
                    in slideshow, a whole page down / up
@@ -27,11 +27,21 @@ for: manuscript on the left, its pdf on the right, refreshing itself.
   Z / X            zoom until the whole page fits / its width fills
   r                reload the file
   q                quit
+
+  click and drag   select the words dragged over
+  y                copy what is selected, as paragraphs rather than as the
+                   lines the page broke them into
+  esc              let the selection go
+
+The clipboard is the terminal's, reached with OSC 52: the text goes out as
+an escape and wezterm puts it on the desktop's clipboard, which is the only
+way across ssh without something installed at this end.
 """
 
 import base64
 import bisect
 import io
+import json
 import os
 import re
 import shutil
@@ -48,9 +58,14 @@ else:
     import tty
 
 import pypdfium2 as pdfium
-from PIL import Image
+from PIL import Image, ImageChops
 
 ESC = "\x1b"
+# what the terminal sends for the mouse, once asked: button, column, row,
+# and M for a press or a drag against m for a release
+MOUSE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
+MOUSE_ON = f"{ESC}[?1002h{ESC}[?1006h"   # drags reported, in SGR coordinates
+MOUSE_OFF = f"{ESC}[?1006l{ESC}[?1002l"
 # The terminal's cell, in px: measured against the repo's wezterm font
 # (13pt JetBrains Mono at 1.15 line height). Off-estimates only stretch
 # the page slightly; they never lose it.
@@ -60,13 +75,20 @@ MAX_CANVAS = 4_000_000  # px budget per frame; the oversample yields to it
 GAP = 12                # the breath between pages, in pdf points
 LINE = 2                # rows of the terminal one j or k scrolls by
 
+# The theme's colours, generated beside the rest of it by
+# nvim/lua/zenwritten_compile.lua. Only the status line's ink is wanted here,
+# and it is kept there rather than copied here, where a recompile would leave
+# it behind.
+PALETTE = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+                       "palette", "zenwritten.json")
+FALLBACK = (128, 128, 128)  # a neutral grey, if the palette cannot be read
+
 def theme(appearance=None):
-    # The status line's faded ink. On Windows it is read the same way neovim
-    # reads the theme: from the file wezterm writes its appearance to (see
+    # The status line's faded ink. On Windows the appearance is read the same
+    # way neovim reads it: from the file wezterm writes it to (see
     # wezterm/wezterm.lua), because the OSC query for the background never
     # survives Windows' console layer. On Linux the terminal is asked
-    # (TerminalInput.appearance) and the answer passed in. The values are
-    # zenwritten's, mixed to sit on its exact grounds. The gutter is
+    # (TerminalInput.appearance) and the answer passed in. The gutter is
     # transparent and needs nothing from here.
     if appearance is None:
         appearance = "dark"
@@ -78,9 +100,144 @@ def theme(appearance=None):
                 appearance = value
         except OSError:
             pass
-    if appearance == "light":
-        return (150, 145, 146)
-    return (110, 100, 102)
+    try:
+        with open(PALETTE, encoding="utf-8") as f:
+            ink = json.load(f)[appearance]["status"].lstrip("#")
+        return tuple(int(ink[i:i + 2], 16) for i in (0, 2, 4))
+    except (OSError, ValueError, KeyError, TypeError):
+        # the status line is the one thing that wants a colour, and a
+        # document is still worth reading without it
+        return FALLBACK
+
+def clipboard(text):
+    """Put text on the terminal's clipboard, through OSC 52.
+
+    Nothing at this end has a clipboard - the nas is headless - so the text
+    is written out as an escape and wezterm puts it on the desktop's. The
+    same way neovim does it over ssh; see nvim/lua/options.lua.
+    """
+    payload = base64.standard_b64encode(text.encode("utf-8")).decode()
+    sys.stdout.write(f"{ESC}]52;c;{payload}\x07")
+    sys.stdout.flush()
+
+
+# How far short of the measure a line has to stop before it is taken to have
+# ended a paragraph rather than simply run out of room. In points, so it
+# holds at any page size: about a character and a half. Measured on a
+# manuscript, a line that merely wrapped stopped 4.7 short and one that
+# ended a paragraph 17.2, with a word broken across the line between them at
+# 13.9 - which is why a broken word is spotted by its hyphen rather than by
+# how short the line is.
+PARAGRAPH = 10.0
+
+
+def wordless(text):
+    """Whether a stretch of text says nothing: blank, or nothing but the
+    control characters a broken word's hyphen comes back as. `strip()` is
+    not enough - it takes whitespace off and leaves \x02 standing."""
+    return not any(ch.isprintable() and not ch.isspace() for ch in text)
+
+
+def rows_of(rects):
+    """Rectangles gathered into the rows they sit on, left to right.
+
+    Two pieces of one line overlap vertically; the next line down does not,
+    because there is leading between them. That is the whole test.
+    """
+    rows = []
+    for rect in sorted(rects, key=lambda r: (-r[3], r[0])):
+        left, bottom, right, top = rect
+        for row in rows:
+            if min(top, row[0][3]) > max(bottom, row[0][1]):
+                row.append(rect)
+                break
+        else:
+            rows.append([rect])
+    return [sorted(row, key=lambda r: r[0]) for row in rows]
+
+
+def reflow(lines):
+    """Printed lines joined back into paragraphs.
+
+    A pdf breaks a line wherever the measure ran out, and those breaks mean
+    nothing away from the page. What it does not carry is where a paragraph
+    ended - there is no blank line in it to find - so that is read off the
+    page's own spacing: the lines of a paragraph sit a leading apart and a
+    new paragraph sits further down. Measured on a manuscript, a line within
+    a paragraph fell 14.2 to 15.2 below the one before it and a new
+    paragraph 24.2: a gap wide enough to see from either side.
+
+    Shortness would be the obvious test and is the wrong one. This prose is
+    set ragged right, so a line ends wherever the next word did not fit and
+    says nothing about whether the paragraph ended with it - measured, a
+    line that merely wrapped stopped anywhere from 4.7 to 11.6 short while
+    one that ended a paragraph stopped 17.2.
+
+    Each line arrives as (text, the height it ended at, or None for the last
+    one, which no break measured).
+    """
+    pieces = []
+    for body, y in lines:
+        # \ufffe stands where a hyphen fell at the end of a line, and the
+        # line covered another row of the page for it. The hyphen is kept:
+        # pdfium marks one the page inserted to break a word and one that
+        # was written the same way, and nothing in the text or the geometry
+        # tells them apart - so "publi-cations" comes back with a hyphen it
+        # does not want, which is plain to see and easy to mend, rather than
+        # "becausewhile" losing one it does, which is neither
+        rows = 1 + body.count("\ufffe")
+        piece = " ".join(body.replace("\ufffe", "-").split())
+        if piece:
+            pieces.append([piece, y, rows])
+    if not pieces:
+        return ""
+
+    # how far apart the rows of one paragraph sit, taken from the middle of
+    # what was seen so one wide gap cannot drag it
+    # a line is measured at its top, so the next one sits as many leadings
+    # below it as it covered rows - two, where a word was broken across it
+    steps = []
+    for (_, y, _), (_, above, rows) in zip(pieces[1:], pieces[:-1]):
+        if y is not None and above is not None:
+            steps.append((above - y) / rows)
+    steps.sort()
+    leading = steps[len(steps) // 2] if steps else 0.0
+
+    paragraphs, current, last_y, last_rows = [], "", None, 1
+    for piece, y, rows in pieces:
+        if current and leading and last_y is not None and y is not None:
+            if (last_y - y) / last_rows > leading * 1.35:
+                paragraphs.append(current)
+                current = ""
+        current = current + " " + piece if current else piece
+        if y is not None:
+            last_y, last_rows = y, rows
+    if current:
+        paragraphs.append(current)
+    return "\n\n".join(paragraphs)
+
+def mark(canvas, box):
+    """Show a rectangle as selected, by turning its ink inside out.
+
+    Inverting rather than tinting: the page is greyscale and may be set on
+    either ground, and this reads as selected on both without the viewer
+    having to know which it is.
+    """
+    left, top, right, bottom = (int(round(v)) for v in box)
+    left, top = max(0, left), max(0, top)
+    right, bottom = min(canvas.width, right), min(canvas.height, bottom)
+    if right <= left or bottom <= top:
+        return
+    region = canvas.crop((left, top, right, bottom))
+    if region.mode in ("LA", "RGBA"):
+        # the ink turns over; the alpha stays, so the gutter is still clear
+        bands = region.split()
+        region = Image.merge(region.mode,
+                             tuple(ImageChops.invert(b) for b in bands[:-1]) + (bands[-1],))
+    else:
+        region = ImageChops.invert(region)
+    canvas.paste(region, (left, top))
+
 
 def frame_escape(canvas, cols, rows, quality=92):
     # One iTerm2 escape for the whole frame: one decode in the terminal,
@@ -106,7 +263,7 @@ def frame_escape(canvas, cols, rows, quality=92):
         f"width={cols};height={rows};preserveAspectRatio=0:{b64}\x07"
     )
 
-class Tpv:
+class Viewer:
     def __init__(self, path, slideshow=False):
         self.path = os.path.abspath(path)
         # Slideshow holds a page number where scrolling holds an offset:
@@ -124,6 +281,10 @@ class Tpv:
         self.mtime = 0
         self.doc = None
         self.cache = {}       # (page, scale) -> rendered PIL image
+        self.texts = {}       # page -> its text, for selecting
+        self.selection = None # ((page, index), (page, index)), in reading order
+        self.anchor = None    # where the drag that is making it started
+        self.notice = None    # a word for the status line, until the next move
         self.load()
 
     # -- document ----------------------------------------------------------
@@ -134,7 +295,7 @@ class Tpv:
             with open(self.path, "rb") as f:
                 data = f.read()
         except OSError as e:
-            raise SystemExit(f"tpv: cannot read {self.path}: {e}")
+            raise SystemExit(f"viewer: cannot read {self.path}: {e}")
         from PIL import ImageChops
         with self.lock:  # the prefetcher must not be mid-render through this
             if self.doc is not None:
@@ -158,6 +319,8 @@ class Tpv:
                     self.gray = False
                     break
             self.cache = {}
+            self.texts = {}        # the old document's, now closed with it
+            self.selection = None  # and its indices mean nothing here
             self.sizes = [self.doc[i].get_size() for i in range(len(self.doc))]
             self.tops = []
             y = 0.0
@@ -228,6 +391,190 @@ class Tpv:
         self.scroll = centre - vh / self.scale / 2
         self.clamp()
 
+    # -- selecting ---------------------------------------------------------
+
+    def textpage(self, i):
+        if i not in self.texts:
+            with self.lock:  # pdfium is not thread-safe
+                self.texts[i] = self.doc[i].get_textpage()
+        return self.texts[i]
+
+    def where(self, col, row):
+        """The cell the mouse is over, as a page and a point on it.
+
+        The point is in the page's own coordinates, which count up from its
+        foot, since that is what pdfium's text is measured in. `scale` comes
+        back with it because the tolerance for finding a character is a cell
+        wide, and a cell is a different number of points in each mode.
+        None when the cell is off the page.
+        """
+        if self.scale is None:
+            return None
+        _, _, vw, vh = self.viewport()
+        px, py = (col + 0.5) * self.cell_w, (row + 0.5) * self.cell_h
+        if self.slideshow:
+            page = self.page
+            w, h = self.sizes[page]
+            scale = min(vw / w, vh / h)
+            x = (px - (vw - w * scale) / 2) / scale
+            down = (py - (vh - h * scale) / 2) / scale
+        else:
+            scale = self.scale
+            y = self.scroll + py / scale
+            page = self.page_at(y)
+            w, h = self.sizes[page]
+            x = (px - (vw - w * scale) / 2) / scale
+            down = y - self.tops[page]
+        # a point beyond the page is pulled back onto its edge rather than
+        # thrown away: dragging out into the gutter, or past the last line,
+        # should carry the selection to the edge of the text the way it does
+        # anywhere else, not stop dead
+        x = min(max(x, 0.0), w)
+        down = min(max(down, 0.0), h)
+        return page, x, h - down, scale
+
+    def index_at(self, col, row):
+        """(page, character) under the mouse, or None when the mouse is not
+        over a page at all."""
+        spot = self.where(col, row)
+        if spot is None:
+            return None
+        page, x, y, scale = spot
+        text = self.textpage(page)
+        index = text.get_index(x, y, self.cell_w / scale, self.cell_h / scale)
+        if index is None:
+            # a press in the margin, or between two lines, still means the
+            # text nearest it: a drag that starts a little wide of the
+            # column should take hold of it rather than do nothing
+            index = self.nearest(page, x, y)
+        return None if index is None else (page, index)
+
+    def nearest(self, page, x, y):
+        """The character closest to a point on a page."""
+        text = self.textpage(page)
+        best, at = None, None
+        for i in range(text.count_chars()):
+            left, bottom, right, top = text.get_charbox(i)
+            dx = max(left - x, 0.0, x - right)
+            dy = max(bottom - y, 0.0, y - top)
+            away = dx * dx + dy * dy
+            if best is None or away < best:
+                best, at = away, i
+        return at
+
+    def select_to(self, spot, anchor=None):
+        """Set the selection between the anchor and here, in reading order."""
+        if spot is None:
+            return
+        if anchor is not None:
+            self.anchor = anchor
+        if self.anchor is None:
+            return
+        a, b = self.anchor, spot
+        self.selection = (a, b) if a <= b else (b, a)
+        self.notice = None
+
+    def selected_text(self):
+        """What is selected, as paragraphs rather than as printed lines."""
+        if not self.selection:
+            return ""
+        (first, start), (last, end) = self.selection
+        lines = []
+        for page in range(first, last + 1):
+            text = self.textpage(page)
+            at = start if page == first else 0
+            to = end if page == last else text.count_chars() - 1
+            if to >= at:
+                lines.extend(self.printed_lines(page, at, to))
+        return reflow(lines)
+
+    def selected_rects(self, page):
+        """The rectangles covering the selection on one page, in its own
+        coordinates - what the highlight is drawn from. These are pdfium's
+        own, one per run of text set the same way, which is right for
+        drawing even though it is wrong for reading; `printed_lines` puts
+        them back into lines for that.
+        """
+        if not self.selection:
+            return []
+        (first, start), (last, end) = self.selection
+        if not first <= page <= last:
+            return []
+        text = self.textpage(page)
+        at = start if page == first else 0
+        to = end if page == last else text.count_chars() - 1
+        if to < at:
+            return []
+        return [text.get_rect(i) for i in range(text.count_rects(at, to - at + 1))]
+
+    def printed_lines(self, page, at, to):
+        """The selection on one page as printed lines: what each says, and
+        where on the page it sat.
+
+        The line breaks are pdfium's own, which is what makes this exact: a
+        break is a real character in the text. Where the line sits is taken
+        from the characters themselves - the highest box on it - rather than
+        from the break, because a selection that stops in the middle of a
+        line has no break at its end to measure by, and that last line is
+        exactly the one a paragraph break is most often missed before. Not
+        the rectangles - one of those is a run
+        of text set the same way rather than a line, and neighbouring ones
+        overlap, so text taken from them comes back repeating itself. Not
+        the characters' own boxes either: a comma sits far lower than a
+        capital, so a line cannot be told from its neighbours that way.
+        """
+        text = self.textpage(page)
+        marks = [(text.get_text_range(i, 1), text.get_charbox(i)) for i in range(at, to + 1)]
+        heights = sorted(b[3] - b[1] for _, b in marks if b[3] - b[1] > 0)
+        if not heights:
+            return []
+        # a character sitting this far below the line it is in is not on it:
+        # that is how the page number is parted from the last line of text,
+        # which pdfium hands over as one run when the line above it ended in
+        # a word broken across the page. Generous enough that a comma, which
+        # sits well below a capital, stays where it belongs.
+        drop = heights[len(heights) // 2] * 1.5
+
+        # `line` is where the line began, which the gaps are measured from;
+        # `row` is the row being read, which a drop is measured against,
+        # and the two differ once a broken word has carried on below
+        lines, current, line, row, left, i = [], [], None, None, None, 0
+        while i < len(marks):
+            ch, box = marks[i]
+            if ch in ("\r", "\n"):
+                lines.append(("".join(current), line))
+                current, line, row, left = [], None, None, None
+                if ch == "\r" and i + 1 < len(marks) and marks[i + 1][0] == "\n":
+                    i += 1  # the pair is one break
+            else:
+                high = box[3] if box[3] - box[1] > 0 else None
+                if high is not None and row is not None and row - high > drop:
+                    # the rest of a word broken across the line begins at
+                    # the margin, under the line it broke from. Something
+                    # starting away to the right is a different block - the
+                    # page number, which pdfium hands over as part of the
+                    # last line when that line ended in a broken word
+                    carries = (current and current[-1] == "\ufffe"
+                               and left is not None and box[0] <= left + drop)
+                    if carries:
+                        row, left = high, box[0]
+                    else:
+                        lines.append(("".join(current), line))
+                        current, line, row, left = [], None, None, None
+                if high is not None:
+                    row = high if row is None else max(row, high)
+                    line = high if line is None else max(line, high)
+                    left = box[0] if left is None else min(left, box[0])
+                current.append(ch)
+            i += 1
+        if current:
+            lines.append(("".join(current), line))
+        # the page number, which is a line of its own at the foot of the page
+        # and no part of what was written
+        if lines and lines[-1][0].strip().isdigit():
+            lines.pop()
+        return lines
+
     # -- drawing -----------------------------------------------------------
 
     def page_image(self, i, s):
@@ -288,12 +635,16 @@ class Tpv:
 
         # fast path: one page fills the whole canvas - the ordinary state
         # of fit-width reading - and the frame is a plain crop of the
-        # cached page, with no background to fill and nothing to compose
+        # cached page, with no background to fill and nothing to compose.
+        # A selection has to be drawn over the page, so it takes the long
+        # way round instead; the fast path stays for the reading that is
+        # not selecting, which is nearly all of it.
         img = self.page_image(i, s)
         iw, ih = img.size
         x = (cw - iw) // 2
         y = int(round((self.tops[i] - top_pts) * s))
-        if x <= 0 and y <= 0 and -x + cw <= iw and -y + ch <= ih:
+        if (not self.selection and x <= 0 and y <= 0
+                and -x + cw <= iw and -y + ch <= ih):
             return img.crop((-x, -y, -x + cw, -y + ch)), cols, rows, vh
 
         # The gutter and the gaps between pages are transparent, not
@@ -316,6 +667,11 @@ class Tpv:
             if src_y1 > src_y0:  # empty when the viewport top sits in a gap
                 src = img.crop((src_x0, src_y0, min(iw, src_x0 + cw), src_y1))
                 canvas.paste(src, (max(0, x), max(0, y)))
+            # the selection on this page, drawn where the page just went
+            for left, bottom, right, top in self.selected_rects(i):
+                _, h = self.sizes[i]
+                mark(canvas, (x + left * s, y + (h - top) * s,
+                              x + right * s, y + (h - bottom) * s))
             i += 1
 
         return canvas, cols, rows, vh
@@ -338,8 +694,11 @@ class Tpv:
         # the margin around the page is transparent for the same reason the
         # gutter is: the terminal composites its own ground behind it
         canvas = Image.new("LA" if self.gray else "RGBA", (cw, ch))
-        canvas.paste(img.crop((0, 0, min(iw, cw), min(ih, ch))),
-                     (max(0, (cw - iw) // 2), max(0, (ch - ih) // 2)))
+        at_x, at_y = max(0, (cw - iw) // 2), max(0, (ch - ih) // 2)
+        canvas.paste(img.crop((0, 0, min(iw, cw), min(ih, ch))), (at_x, at_y))
+        for left, bottom, right, top in self.selected_rects(self.page):
+            mark(canvas, (at_x + left * s, at_y + (h - top) * s,
+                          at_x + right * s, at_y + (h - bottom) * s))
         return canvas, cols, rows, vh
 
     def frame_string(self, sharp=True):
@@ -356,6 +715,8 @@ class Tpv:
         # on whatever the terminal's ground already is
         centre = self.scroll + vh / self.scale / 2
         line = f" {os.path.basename(self.path)}  ·  {self.page_at(centre) + 1}/{len(self.doc)}"
+        if self.notice:
+            line += f"  ·  {self.notice}"
         r, g, b = self.faded
         # the whole frame as one write inside a synchronized update: clear,
         # page and status arrive together, so nothing tears and nothing
@@ -428,16 +789,46 @@ if os.name == "nt":
                 ("dwControlKeyState", ctypes.c_uint32),
             ]
 
+        class COORD(ctypes.Structure):
+            _fields_ = [("X", ctypes.c_int16), ("Y", ctypes.c_int16)]
+
+        class MOUSE_EVENT(ctypes.Structure):
+            _fields_ = [
+                ("dwMousePosition", COORD),
+                ("dwButtonState", ctypes.c_uint32),
+                ("dwControlKeyState", ctypes.c_uint32),
+                ("dwEventFlags", ctypes.c_uint32),
+            ]
+
+        class EVENT(ctypes.Union):
+            pass
+
         class INPUT_RECORD(ctypes.Structure):
             pass
 
         def __init__(self):
+            self.EVENT._fields_ = [
+                ("KeyEvent", ConsoleInput.KEY_EVENT),
+                ("MouseEvent", ConsoleInput.MOUSE_EVENT),
+            ]
             self.INPUT_RECORD._fields_ = [
                 ("EventType", ctypes.c_uint16),
-                ("KeyEvent", ConsoleInput.KEY_EVENT),
+                ("Event", ConsoleInput.EVENT),
             ]
+            self.pointer = []
             self.k32 = ctypes.windll.kernel32
             self.handle = self.k32.GetStdHandle(-10)
+            # The console reports the mouse only when asked, and only once
+            # quick edit is off - quick edit takes a drag for itself and
+            # makes a selection of its own out of it. Clearing it needs the
+            # extended flag set in the same call. Untested on windows; the
+            # linux half is what this was built against.
+            self.mode = ctypes.c_uint32()
+            if self.k32.GetConsoleMode(self.handle, ctypes.byref(self.mode)):
+                ENABLE_MOUSE_INPUT, ENABLE_EXTENDED_FLAGS = 0x0010, 0x0080
+                ENABLE_QUICK_EDIT_MODE = 0x0040
+                wanted = (self.mode.value | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS)
+                self.k32.SetConsoleMode(self.handle, wanted & ~ENABLE_QUICK_EDIT_MODE)
 
         def read(self):
             # every pending (char, repeat_count) keydown; [] when nothing waits
@@ -450,17 +841,42 @@ if os.name == "nt":
                 return []
             events = []
             for rec in records[: got.value]:
-                if rec.EventType == 1 and rec.KeyEvent.UnicodeChar != "\x00":
+                if rec.EventType == 1 and rec.Event.KeyEvent.UnicodeChar != "\x00":
                     # key-ups travel too: a release is a fact worth knowing
                     events.append((
-                        rec.KeyEvent.UnicodeChar,
-                        max(1, rec.KeyEvent.wRepeatCount),
-                        bool(rec.KeyEvent.bKeyDown),
+                        rec.Event.KeyEvent.UnicodeChar,
+                        max(1, rec.Event.KeyEvent.wRepeatCount),
+                        bool(rec.Event.KeyEvent.bKeyDown),
                     ))
-            return events
+                elif rec.EventType == 2:  # MOUSE_EVENT
+                    self.pointer.append(self.pointer_from(rec.Event.MouseEvent))
+            return [e for e in events]
+
+        @staticmethod
+        def pointer_from(ev):
+            """One console mouse record, in the shape the linux half sends.
+
+            dwEventFlags says what happened: 0 a button changed, 1 the
+            mouse moved, 4 the wheel turned, and the wheel's direction is
+            the sign of the high word of the button state.
+            """
+            col, row = ev.dwMousePosition.X, ev.dwMousePosition.Y
+            MOUSE_MOVED, MOUSE_WHEELED = 0x0001, 0x0004
+            if ev.dwEventFlags & MOUSE_WHEELED:
+                up = ctypes.c_int32(ev.dwButtonState).value > 0
+                return ("wheel-up" if up else "wheel-down", col, row)
+            held = ev.dwButtonState & 0x0001  # the left button
+            if ev.dwEventFlags & MOUSE_MOVED:
+                return ("drag" if held else "move", col, row)
+            return ("press" if held else "release", col, row)
+
+        def mouse(self):
+            out, self.pointer = self.pointer, []
+            return out
 
         def restore(self):
-            pass
+            if getattr(self, "mode", None) is not None:
+                self.k32.SetConsoleMode(self.handle, self.mode.value)
 
 class TerminalInput:
     # The Linux half of the keyboard: stdin taken out of line mode so keys
@@ -470,6 +886,8 @@ class TerminalInput:
     # loses releases too.
 
     def __init__(self):
+        self.pointer = []   # mouse events, waiting to be asked for
+        self.partial = ""   # an escape split across two reads
         self.fd = sys.stdin.fileno()
         self.old = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)  # not raw: output keeps its newline handling
@@ -480,13 +898,31 @@ class TerminalInput:
         termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
 
     def read(self):
-        events = []
+        data = self.partial
+        self.partial = ""
         while select.select([self.fd], [], [], 0)[0]:
-            data = os.read(self.fd, 4096)
-            if not data:
+            chunk = os.read(self.fd, 4096)
+            if not chunk:
                 break
-            events.extend((ch, 1, True) for ch in data.decode("utf-8", "ignore"))
+            data += chunk.decode("utf-8", "ignore")
+        if not data:
+            return []
+        # a mouse report can be cut in half by the end of a read, and half
+        # of one typed into the document would be a mess; hold it back
+        cut = data.rfind("\x1b[<")
+        if cut != -1 and not MOUSE.match(data, cut):
+            self.partial, data = data[cut:], data[:cut]
+        events, at = [], 0
+        for m in MOUSE.finditer(data):
+            events.extend((ch, 1, True) for ch in data[at:m.start()])
+            self.pointer.append(pointer_event(m))
+            at = m.end()
+        events.extend((ch, 1, True) for ch in data[at:])
         return events
+
+    def mouse(self):
+        out, self.pointer = self.pointer, []
+        return out
 
     def query(self, request, pattern, timeout=0.25):
         # a question for the terminal, and its answer if one comes in time
@@ -514,6 +950,17 @@ class TerminalInput:
 
     def restore(self):
         termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+
+def pointer_event(m):
+    """One mouse report as (what, column, row), counted from zero."""
+    button, col, row, final = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+    col, row = col - 1, row - 1          # the terminal counts from one
+    if button & 64:                      # the wheel, which is not a button
+        return ("wheel-up" if button & 1 == 0 else "wheel-down", col, row)
+    if final == "m":
+        return ("release", col, row)
+    return ("drag" if button & 32 else "press", col, row)
+
 
 def measure_cell(con):
     # Ask the terminal for its cell size in pixels (XTWINOPS 16t), so pages
@@ -556,11 +1003,11 @@ def main():
     if len(args) != 1:
         raise SystemExit(1)  # the keys are in the docstring above, not on screen
 
-    tpv = Tpv(args[0], slideshow=slideshow)
+    viewer = Viewer(args[0], slideshow=slideshow)
     con = ConsoleInput() if os.name == "nt" else TerminalInput()
     if os.name != "nt":
-        tpv.faded = theme(con.appearance())
-    tpv.cell_w, tpv.cell_h, tpv.cell_measured = measure_cell(con)
+        viewer.faded = theme(con.appearance())
+    viewer.cell_w, viewer.cell_h, viewer.cell_measured = measure_cell(con)
     # The primary screen, and the cursor left alone - both deliberately.
     # This stack shows images nowhere but the primary screen, and hiding
     # the cursor (ESC[?25l) silently suppresses every image drawn after
@@ -568,7 +1015,7 @@ def main():
     # working frames against blank ones one escape at a time. The cursor
     # simply rests in the status line instead. Nothing here scrolls, so
     # the shell's history above survives untouched.
-    sys.stdout.write(f"{ESC}[2J")
+    sys.stdout.write(f"{ESC}[2J" + MOUSE_ON)
     count = ""      # digits gathering ahead of gg
     pending_g = False
 
@@ -578,7 +1025,7 @@ def main():
         if pending_g:
             pending_g = False
             if ch == "g":
-                tpv.goto_page(int(count) if count else 1)
+                viewer.goto_page(int(count) if count else 1)
                 count = ""
                 return "dirty"
             count = ""
@@ -590,36 +1037,47 @@ def main():
             return None
         n = int(count) if count else 1
         count = ""
+        if ch != "y":
+            viewer.notice = None  # a word in the status line lasts until the next key
         if ch in ("q", "\x03"):
             return "quit"
         if ch == "j":
-            tpv.step(1, n)
+            viewer.step(1, n)
         elif ch == "k":
-            tpv.step(-1, n)
+            viewer.step(-1, n)
         elif ch == "\n":      # ctrl-j
-            tpv.page_step(1, n)
+            viewer.page_step(1, n)
         elif ch == "\x0b":    # ctrl-k
-            tpv.page_step(-1, n)
+            viewer.page_step(-1, n)
         elif ch == "G":
-            tpv.goto_page(len(tpv.doc))
+            viewer.goto_page(len(viewer.doc))
         elif ch == "z":
-            tpv.zoom(1 / 1.25)  # out
+            viewer.zoom(1 / 1.25)  # out
         elif ch == "x":
-            tpv.zoom(1.25)      # in
+            viewer.zoom(1.25)      # in
         elif ch == "Z":
-            tpv.fit_page()
+            viewer.fit_page()
         elif ch == "X":
-            tpv.fit_width()
+            viewer.fit_width()
+        elif ch == "y":
+            text = viewer.selected_text()
+            if text:
+                clipboard(text)
+                viewer.notice = f"copied {len(text)} characters"
+            else:
+                viewer.notice = "nothing selected"
+        elif ch == "\x1b":   # esc lets the selection go
+            viewer.selection, viewer.anchor, viewer.notice = None, None, None
         elif ch == "r":
-            tpv.load()
-            tpv.clamp()
+            viewer.load()
+            viewer.clamp()
         else:
             return None
         return "dirty"
 
     try:
-        tpv.render()
-        tpv.start_prefetcher()
+        viewer.render()
+        viewer.start_prefetcher()
         last_size = shutil.get_terminal_size()
         last_check = time.monotonic()
         settle_at = None  # when a moving page owes itself a sharp frame
@@ -644,6 +1102,22 @@ def main():
         while True:
             events = con.read()
             now = time.monotonic()
+            for what, col, row in con.mouse():
+                if what == "press":
+                    viewer.anchor = None
+                    viewer.selection = None
+                    viewer.notice = None
+                    viewer.select_to(viewer.index_at(col, row),
+                                     anchor=viewer.index_at(col, row))
+                    dirty = True
+                elif what == "drag":
+                    viewer.select_to(viewer.index_at(col, row))
+                    dirty = True
+                elif what in ("wheel-up", "wheel-down"):
+                    # the wheel is the terminal's no longer, now that the
+                    # mouse is being reported; it moves the page instead
+                    viewer.step(-1 if what == "wheel-up" else 1, 3)
+                    dirty = True
             if events:
                 quiet_since = now
                 # a lone tap of j with a prediction waiting: the frame is
@@ -656,9 +1130,9 @@ def main():
                     and events[0] == ("j", 1, True)
                     and not count
                     and not pending_g
-                    and predicted[0] == tpv.state_key()
+                    and predicted[0] == viewer.state_key()
                 ):
-                    _, (tpv.scroll, tpv.page), frame = predicted
+                    _, (viewer.scroll, viewer.page), frame = predicted
                     predicted = None
                     sys.stdout.write(frame)
                     sys.stdout.flush()
@@ -668,12 +1142,12 @@ def main():
                 for ch, repeat, down in events:
                     if not down:
                         # a released scroll key stops the view instantly
-                        if ch in ("j", "k") and debt and not tpv.slideshow:
+                        if ch in ("j", "k") and debt and not viewer.slideshow:
                             stop(0.05)
                         continue
                     if (
                         ch in ("j", "k")
-                        and not tpv.slideshow
+                        and not viewer.slideshow
                         and not count
                         and not pending_g
                     ):
@@ -717,9 +1191,9 @@ def main():
                     last_tick = now
                     boost = 1.5 if debt > 6 else 1.0
                     move = min(debt, RATE * dt * boost)
-                    tpv.step(debt_dir, move)
+                    viewer.step(debt_dir, move)
                     debt -= move
-                    tpv.render(sharp=False)
+                    viewer.render(sharp=False)
                     next_frame = max(next_frame + TICK, time.monotonic())
                     if debt <= 0:
                         stop(0.12)
@@ -728,7 +1202,7 @@ def main():
                 continue
 
             if dirty:
-                tpv.render(sharp=False)
+                viewer.render(sharp=False)
                 dirty = False
                 settle_at = time.monotonic() + 0.12
                 continue
@@ -736,34 +1210,34 @@ def main():
             if not events:
                 if settle_at is not None and now >= settle_at:
                     settle_at = None
-                    tpv.render(sharp=True)
+                    viewer.render(sharp=True)
                     continue
                 # a reading pause: build the next j-step's sharp frame in
                 # advance, so the next tap paints in the time of a write
                 if predicted is None and settle_at is None and now - quiet_since > 0.2:
-                    origin = tpv.state_key()
-                    before = (tpv.scroll, tpv.page)
-                    tpv.step(1)
-                    if (tpv.scroll, tpv.page) != before:
-                        frame = tpv.frame_string(sharp=True)
-                        predicted = (origin, (tpv.scroll, tpv.page), frame)
-                    tpv.scroll, tpv.page = before
+                    origin = viewer.state_key()
+                    before = (viewer.scroll, viewer.page)
+                    viewer.step(1)
+                    if (viewer.scroll, viewer.page) != before:
+                        frame = viewer.frame_string(sharp=True)
+                        predicted = (origin, (viewer.scroll, viewer.page), frame)
+                    viewer.scroll, viewer.page = before
                 time.sleep(0.003)
                 if now - last_check > 0.5:
                     last_check = now
-                    if tpv.changed_on_disk():
-                        tpv.load()
-                        tpv.clamp()
+                    if viewer.changed_on_disk():
+                        viewer.load()
+                        viewer.clamp()
                         predicted = None
-                        tpv.render()
+                        viewer.render()
                     elif shutil.get_terminal_size() != last_size:
                         last_size = shutil.get_terminal_size()
                         predicted = None
-                        tpv.render()
+                        viewer.render()
     except KeyboardInterrupt:
         pass
     finally:
-        sys.stdout.write(f"{ESC}[2J{ESC}[H{ESC}[?25h")
+        sys.stdout.write(MOUSE_OFF + f"{ESC}[2J{ESC}[H{ESC}[?25h")
         sys.stdout.flush()
         con.restore()
 

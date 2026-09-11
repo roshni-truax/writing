@@ -5,8 +5,8 @@ A deck is a markdown file with `===` on a line of its own between slides.
 Each slide becomes one 16:9 page, set in the terminal's font on a grid of
 `columns` characters (72 unless the frontmatter says otherwise), so anything
 drawn in characters lines up exactly with the text around it. The pdf lands
-next to the source with the same name; tpv, if it has the old one open,
-re-renders.
+next to the source with the same name; the viewer, if it has the old one
+open, re-renders.
 
 Words after the `===` describe the slide that follows it (a deck may open
 with one, for its first slide):
@@ -22,10 +22,11 @@ with one, for its first slide):
   slides deck.md -o out.pdf
   slides deck.md --typ        print the generated typst instead
 
-Frontmatter, all optional:
+Frontmatter is the fenced block on the first line of the file, the same one
+prose opens with. All of it is optional but the first line:
 
-  ---
-  slides: true      what tells the editor to export with this, not pandoc
+  ```
+  slides: true      what makes it a deck rather than a manuscript
   theme: dark       or light
   progress: true    a bar in the footer showing how far through the deck
                     this slide is; `start`, `section` and `end` above shape it
@@ -33,21 +34,23 @@ Frontmatter, all optional:
   size: 13pt
   columns: 72
   font: JetBrainsMono NFM
-  ---
+  ```
 
 Markdown that is understood: `#` is the slide's title, `##` and deeper a dim
 subtitle, paragraphs, `-` and `1.` lists (nested by indenting), `>` quotes,
 `|` tables, `---` for a rule, `![alt](path)` on its own line, and inline
 **bold**, *emphasis*, `code`, [links](url). A fenced block is drawn
-verbatim, unless its language names a plugin. Three words on a fence line
+verbatim, unless its language names a plugin. Two words on a fence line
 say how the block is set, whatever drew it:
 
   small               smaller type on a finer grid, for a dense chart
   title="..."         a line under the block, centered on what it drew
-  left-title="..."    at its left, turned a quarter turn, and set as type
 
-A chart whose bars stand up usually wants `title=`, and one whose bars run
-across the page `left-title=`, the only thing here not made of characters.
+A block naming an image sets one instead, the same way prose does:
+
+  ``` image="ridge.png"             the whole width of the grid
+  ``` image="ridge.png" size=0.6    six tenths of it
+  ``` image="ridge.png" size=full   fitted to the whole slide
 
 Blank lines count. One between blocks is the ordinary gap; each one after
 that adds a row of the grid, so air is added by leaving it. Blank lines at
@@ -83,16 +86,15 @@ three. `width` is the grid width in characters.
 For ```chart bar height=6``` the args are ["bar"] and opts {"height": "6"}.
 
 A plugin that wants names above its columns, turned a quarter turn the way
-a heatmap's are, returns a dict instead:
-
-  {"lines": [...], "turned": {"indent": int, "step": int, "names": [str]}}
-
-`indent` is how many characters in the first column starts and `step` how
-wide each one is, so the names can be set over them.
+a heatmap's are, returns `_draw.turned(lines, indent, step, names)` - still
+the lines, with the names carried along. `indent` is how many characters in
+the first column starts and `step` how wide each one is, so the names can be
+set over them.
 """
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -100,16 +102,51 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))  # through the symlink on the nas
+sys.path.insert(0, os.path.dirname(HERE))  # printer/, for the shared pieces
+# The theme's colours, generated beside the rest of it by
+# nvim/lua/zenwritten_compile.lua. A deck is set in the same grounds and inks
+# as the editor it was written in, and this is where they are kept, rather
+# than in a copy here that a recompile would leave behind. Two folders up:
+# this is printer/slides, and the palette sits at the top of the checkout.
+PALETTE = os.path.join(os.path.dirname(os.path.dirname(HERE)), "palette",
+                       "zenwritten.json")
+
+import frontmatter  # noqa: E402  (found through the path set just above)
 TONES = ("fg", "dim", "faint")
 SHADE = re.compile(r"^shade-(\d{1,3})$")  # a tone by the percent it is mixed at
 SMALL = 0.8  # the type size of a block whose fence says `small`
+# The grid's measures, in characters. theme.typ is handed these in `cfg`
+# rather than repeating them, since a drawing is laid out here and set
+# there and the two only line up while they agree.
+GUTTER = 2       # between the columns of a `::: row`
+
 DEFAULTS = {"theme": "dark", "size": "13pt", "columns": "72", "font": "JetBrainsMono NFM",
             "aspect": "16:9", "progress": "false"}
-WORDS = {"center", "centre", "bottom", "start", "section", "end"}  # centre is taken too
+TONE_NAMES = ("bg", "fg", "dim", "faint")  # what a slide is set in
+WORDS = {"center", "bottom", "start", "section", "end"}
 
 
 class DeckError(Exception):
     pass
+
+
+def palette(name):
+    """The grounds and inks of one theme, as typst source."""
+    try:
+        with open(PALETTE, encoding="utf-8") as f:
+            themes = json.load(f)
+    except OSError as e:
+        raise DeckError(f"cannot read the palette at {PALETTE}: {e}")
+    except ValueError as e:
+        raise DeckError(f"the palette at {PALETTE} is not readable json: {e}")
+    if name not in themes:
+        known = ", ".join(k for k in themes if not k.startswith("_"))
+        raise DeckError(f"theme must be one of {known}, not {name!r}")
+    colours = themes[name]
+    missing = [t for t in TONE_NAMES if t not in colours]
+    if missing:
+        raise DeckError(f"the {name} palette has no {' or '.join(missing)}")
+    return "(" + ", ".join(f"{t}: rgb({q(colours[t])})" for t in TONE_NAMES) + ")"
 
 
 # --- plugins -----------------------------------------------------------------
@@ -187,6 +224,21 @@ def inline(text):
     return " + ".join(parts) or 'text("")'
 
 
+def image_expr(opts, number):
+    """An `image="…"` block: the picture at a share of the grid's width, or
+    `full` to fit the whole slide."""
+    size = opts.get("size", "1")
+    if size == "full":
+        return f"imagefull({q(opts['image'])})"
+    try:
+        width = float(size)
+    except ValueError:
+        raise DeckError(f"slide {number}: size is a number or full, not {size!r}")
+    if not 0 < width <= 1:
+        raise DeckError(f"slide {number}: size runs from just above 0 to 1, not {size}")
+    return f"image({q(opts['image'])}, width: {width * 100:g}%)"
+
+
 def ascii_expr(lines, width=None, halign="left", scale=1.0):
     """`width` and `halign` shift the block as one, by whole columns."""
     if halign != "left" and width:
@@ -208,10 +260,11 @@ LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 IMAGE = re.compile(r"^!\[([^\]]*)\]\(([^)\s]+)\)(?:\{width=([^}]+)\})?\s*$")
 QUOTE = re.compile(r"^>\s?(.*)$")
 DIV_OPEN = re.compile(r"^:{3,}\s*(\S+)((?:\s+\S+)*)\s*$")
-GUTTER = 2      # characters between the columns of a `::: row`
-LEFT_TITLE = 3  # characters a turned title and its gap take at a block's left
 DIV_CLOSE = re.compile(r"^:{3,}\s*$")
-ALIGNS = {"center": "center", "centre": "center", "right": "right", "left": "left"}
+RULE = re.compile(r"^-{3,}\s*$")
+TABLE_ROW = re.compile(r"^\|.*\|\s*$")
+TABLE_SEP = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
+ALIGNS = {"center": "center", "right": "right", "left": "left"}
 
 
 def close_div(lines, start):
@@ -279,27 +332,6 @@ def shares(weights, count, width, number):
     out = [int(room * w / sum(weights)) for w in weights]
     out[out.index(max(out))] += room - sum(out)
     return out
-RULE = re.compile(r"^-{3,}\s*$")
-TABLE_ROW = re.compile(r"^\|.*\|\s*$")
-TABLE_SEP = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
-
-
-def frontmatter(text):
-    meta = dict(DEFAULTS)
-    lines = text.split("\n")
-    if lines and lines[0].strip() == "---":
-        for i in range(1, len(lines)):
-            if lines[i].strip() in ("---", "..."):
-                body = "\n".join(lines[i + 1:])
-                break
-            if ":" in lines[i]:
-                key, _, value = lines[i].partition(":")
-                meta[key.strip()] = value.strip().strip("'\"")
-        else:
-            raise DeckError("frontmatter never closes")
-    else:
-        body = text
-    return meta, body
 
 
 def split_slides(body):
@@ -456,12 +488,14 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
             # they come off before the rest of the line names a plugin
             scale = SMALL if "small" in words else 1.0
             titles = {w.split("=", 1)[0]: w.split("=", 1)[1] for w in words
-                      if w.startswith(("title=", "left-title="))}
-            words = [w for w in words
-                     if w != "small" and not w.startswith(("title=", "left-title="))]
-            # a turned title stands in the block's room, so the block is
-            # drawn that much narrower rather than wrapping against it
-            cells = round((width - (LEFT_TITLE if "left-title" in titles else 0)) / scale)
+                      if w.startswith("title=")}
+            words = [w for w in words if w != "small" and not w.startswith("title=")]
+            cells = round(width / scale)
+            block_opts = dict(w.split("=", 1) for w in words if "=" in w)
+            if "image" in block_opts:
+                # the same block prose sets an image with, on the grid here
+                add(image_expr(block_opts, number))
+                continue
             lang = words[0] if words else ""
             where = f"slide {number}, ```{lang}"
             if lang in plugins:
@@ -475,9 +509,7 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                     raise DeckError(f"{where}: {type(e).__name__}: {e}") from e
             else:
                 drawn = body
-            turned = None
-            if isinstance(drawn, dict):
-                turned, drawn = drawn.get("turned"), drawn["lines"]
+            turned = getattr(drawn, "turned", None)
             shown = normalise_lines(drawn, cells, where)
             if "title" in titles:
                 # under the block, centered on what it actually drew rather
@@ -492,10 +524,7 @@ def parse_slide(lines, plugins, width, number, halign="left", has_title=False):
                 names = ", ".join(q(n) for n in turned["names"])
                 expr = (f"turned-names({turned['indent'] * scale}, {turned['step'] * scale}, "
                         f"({names},), {expr})")
-            if "left-title" in titles:
-                add(f"left-title({q(titles['left-title'])}, {expr})")
-            else:
-                parts.append(expr)
+            parts.append(expr)
             continue
 
         if RULE.match(line):
@@ -616,35 +645,76 @@ def footers(slides, width, progress):
     return out
 
 
-def build(text, plugins):
-    meta, body = frontmatter(text)
+CITE = re.compile(r"(?<!\\)\{\{")  # a note or a citation, which prose has and a deck does not
+
+
+def build(meta, body, plugins):
+    meta = dict(DEFAULTS, **{k: v for k, v in meta.items() if k in DEFAULTS})
+    if CITE.search(body):
+        # silently setting the braces would be worse: a deck's foot is
+        # already the progress bar's, so there is nowhere for a note to go
+        raise DeckError("a deck has no footnotes; {{ }} is prose only "
+                        "(write \\{{ for the braces themselves)")
     try:
         columns = int(meta["columns"])
     except ValueError:
         raise DeckError(f"columns must be a whole number, not {meta['columns']!r}")
-    if meta["theme"] not in ("dark", "light"):
-        raise DeckError(f"theme must be dark or light, not {meta['theme']!r}")
-    m = re.match(r"^(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)$", meta["aspect"])
+    tones = palette(meta["theme"])
+    m = re.match(r"^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$", meta["aspect"])
     if not m:
         raise DeckError(f"aspect should look like 16:9, not {meta['aspect']!r}")
     aspect = float(m.group(2)) / float(m.group(1))
 
     out = [
         f"#let cfg = (theme: {q(meta['theme'])}, size: {meta['size']}, "
-        f"columns: {columns}, font: {q(meta['font'])}, aspect: {aspect:.6f})",
+        f"columns: {columns}, font: {q(meta['font'])}, aspect: {aspect:.6f}, "
+        f"gutter: {GUTTER}, palette: {tones})",
     ]
     with open(os.path.join(HERE, "theme.typ"), encoding="utf-8") as f:
         out.append(f.read())
     slides = split_slides(body)
-    lines_below = footers(slides, columns, meta["progress"].lower() in ("true", "yes", "on"))
+    lines_below = footers(slides, columns, frontmatter.flag(meta, "progress"))
     for n, ((words, lines), footer) in enumerate(zip(slides, lines_below), 1):
         parts = parse_slide(lines, plugins, columns, n)
-        align = "center" if words & {"center", "centre"} else "bottom" if "bottom" in words else "top"
+        align = "center" if "center" in words else "bottom" if "bottom" in words else "top"
         footer_expr = "none" if footer is None else "(" + ", ".join(
             f"({q(t)}, {q(tone)})" for t, tone in footer) + ",)"
         out.append(f"#slide(number: {n}, align: {q(align)}, footer: {footer_expr},\n  "
                    + ",\n  ".join(parts) + ",\n)")
     return "\n".join(out) + "\n"
+
+
+# --- rendering ---------------------------------------------------------------
+
+def render(source, meta, body, output=None, typ_only=False, font_path=None):
+    """Set `body` as a pdf beside `source`, or wherever `output` says.
+
+    `meta` is what the frontmatter block said, read by printer before it
+    knew which kind of document this was. Raises DeckError with a plain
+    sentence for anything the deck itself got wrong, so printer can report
+    it the same way it reports its own.
+    """
+    typ = build(meta, body, load_plugins())
+    if typ_only:
+        sys.stdout.write(typ)
+        return None
+
+    output = os.path.abspath(output or os.path.splitext(source)[0] + ".pdf")
+    cmd = ["typst", "compile", "-", output]
+    if font_path:
+        cmd += ["--font-path", font_path]
+    # from the deck's own folder, so an image path in it resolves
+    proc = subprocess.run(cmd, input=typ.encode("utf-8"),
+                          cwd=os.path.dirname(os.path.abspath(source)),
+                          capture_output=True)
+    stderr = proc.stderr.decode("utf-8", "replace")
+    if proc.returncode != 0:
+        # a slide that does not fit is the one failure with something useful
+        # to say; typst wraps it in a traceback nobody needs
+        panic = re.search(r"panicked with: (.*)", stderr)
+        raise DeckError(panic.group(1) if panic else stderr.rstrip())
+    sys.stderr.write(stderr)
+    return output
 
 
 # --- main --------------------------------------------------------------------
@@ -656,33 +726,14 @@ def main():
     ap.add_argument("--typ", action="store_true", help="print the typst source instead")
     ap.add_argument("--font-path", help="extra font directory for typst")
     args = ap.parse_args()
-
-    with open(args.source, encoding="utf-8") as f:
-        text = f.read()
     try:
-        typ = build(text, load_plugins())
-    except DeckError as e:
+        with open(args.source, encoding="utf-8") as f:
+            meta, body = frontmatter.read(f.read())
+        output = render(args.source, meta, body, args.output, args.typ, args.font_path)
+    except (DeckError, frontmatter.FrontmatterError) as e:
         sys.exit(f"slides: {e}")
-
-    if args.typ:
-        sys.stdout.write(typ)
-        return
-
-    output = os.path.abspath(args.output or os.path.splitext(args.source)[0] + ".pdf")
-    cmd = ["typst", "compile", "-", output]
-    if args.font_path:
-        cmd += ["--font-path", args.font_path]
-    # from the deck's own folder, so an image path in it resolves
-    proc = subprocess.run(cmd, input=typ.encode("utf-8"), cwd=os.path.dirname(os.path.abspath(args.source)),
-                          capture_output=True)
-    stderr = proc.stderr.decode("utf-8", "replace")
-    if proc.returncode != 0:
-        # a slide that does not fit is the one failure with something useful
-        # to say; typst wraps it in a traceback nobody needs
-        panic = re.search(r"panicked with: (.*)", stderr)
-        sys.exit(f"slides: {panic.group(1)}" if panic else stderr.rstrip())
-    sys.stderr.write(stderr)
-    print(f"wrote {os.path.basename(output)}")
+    if output:
+        print(f"wrote {os.path.basename(output)}")
 
 
 if __name__ == "__main__":

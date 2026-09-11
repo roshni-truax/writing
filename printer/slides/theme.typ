@@ -7,13 +7,11 @@
 // reaches from margin to margin, and anything narrower lines up with the
 // text above it.
 
-#let palettes = (
-  // zenwritten's grounds and inks (see wezterm/zenwritten.lua). faint is
-  // mixed to sit just off the ground: rules, empty bar, slide numbers.
-  dark: (bg: rgb("#171213"), fg: rgb("#BBBBBB"), dim: rgb("#8E8E8E"), faint: rgb("#4E4849")),
-  light: (bg: rgb("#EEEEEE"), fg: rgb("#353535"), dim: rgb("#5C5C5C"), faint: rgb("#B8B5B5")),
-)
-#let theme = palettes.at(cfg.theme)
+// zenwritten's grounds and inks, arriving in `cfg` from slides.py, which
+// reads them from palette/zenwritten.json - the file the editor's own theme
+// is compiled into, so a deck is set in the colours it was written in.
+// `faint` sits just off the ground: rules, an empty bar, slide numbers.
+#let theme = cfg.palette
 
 // A tone is one of the three the deck writes in, or `shade-N`: N percent of
 // the way from the page's ground to its ink. That is how a plugin shades a
@@ -28,6 +26,8 @@
 }
 
 // JetBrains Mono's advance is 0.6em, so this is the width of one character.
+// The gutter between a row's columns is counted in characters and arrives
+// in `cfg` from slides.py, which splits the grid by the same number.
 #let ch = 0.6 * cfg.size
 #let text-width = cfg.columns * ch
 
@@ -92,9 +92,11 @@
 #set text(font: cfg.font, size: cfg.size, weight: 200, fill: theme.fg)
 #show strong: set text(weight: 800)
 #set par(leading: 0.65em, spacing: 1.3em)
-// Lists step in two characters, like a quotation. A bullet, then a ring
-// for the level inside it; the bullets are dim so the words come first.
-#set list(marker: (text(fill: theme.dim, "•"), text(fill: theme.dim, "◦")), indent: 2 * ch, body-indent: ch)
+// Lists step in two characters, like a quotation. A solid bullet, a ring, a
+// triangle, a square, and then round again - the same four prose sets and
+// the editor draws. The bullets are dim so the words come first.
+#let bullets = ("•", "◦", "‣", "▪").map(m => text(fill: theme.dim, m))
+#set list(marker: bullets, indent: 2 * ch, body-indent: ch)
 #set enum(indent: 2 * ch, body-indent: ch)
 
 // A slide is a page. Content sits at the top unless the `===` before the
@@ -128,13 +130,15 @@
 
 #let subtitle(t) = par(text(fill: theme.dim, t))
 
-// A quotation: dim, behind a hairline, the whole thing stepped in from
-// the margin by two characters.
+// A quotation: the deck's own ink behind a dim hairline, the whole thing
+// stepped in from the margin by two characters. The words are `fg` like any
+// others (roshni, 2026-09-10) - the rule is what marks them as quoted, and
+// prose sets one the same way.
 #let quote(body) = pad(left: 2 * ch, block(
   width: 100%,
   inset: (left: 2 * ch),
   stroke: (left: 0.5pt + theme.dim),
-  text(fill: theme.dim, body),
+  body,
 ))
 
 // Empty rows, from blank lines left in the source beyond the first: each
@@ -143,7 +147,8 @@
 
 // Blocks side by side, from a `::: row`. Each column arrives as its width
 // in characters and its content; the widths are counted in `ch`, so the
-// columns land on the same grid the characters do.
+// columns land on the same grid the characters do, and the gutter between
+// them is the one slides.py split the grid by.
 // `side` is where the row sits. The columns keep the widths they were given
 // whatever it says, so the row is laid out once and then moved as one piece;
 // sizing the columns to their contents instead would rearrange the row while
@@ -156,7 +161,7 @@
   let items = cols.pos()
   let g = grid(
     columns: items.map(it => it.at(0) * ch),
-    column-gutter: 2 * ch,
+    column-gutter: cfg.gutter * ch,
     align: top,
     ..items.map(it => it.at(1)),
   )
@@ -164,26 +169,12 @@
     layout(room => {
       let last = items.last()
       let drawn = calc.min(measure(last.at(1)).width, last.at(0) * ch)
-      let ink = items.slice(0, -1).map(it => (it.at(0) + 2) * ch).sum(default: 0pt) + drawn
+      let ink = items.slice(0, -1).map(it => (it.at(0) + cfg.gutter) * ch).sum(default: 0pt) + drawn
       let slack = calc.max(room.width - ink, 0pt)
       move(dx: if side == "center" { slack / 2 } else { slack }, g)
     })
   }
 }
-
-// A title at a block's left, turned a quarter turn so it reads upward, the
-// way an axis is labelled. This is the one thing on a slide set as type
-// rather than drawn in characters: stacked letters would need a row each,
-// and a title of any length has more letters than a chart has rows.
-// The turned title and its gap are three characters wide, which is what
-// slides.py holds back from the block beside it (LEFT_TITLE there).
-#let left-title(words, body) = block(grid(
-  columns: (2.2 * ch, auto),
-  column-gutter: 0.8 * ch,
-  align: horizon,
-  rotate(-90deg, reflow: true, text(fill: theme.dim, words)),
-  body,
-))
 
 // Names above a block's columns, each turned a quarter turn, from a plugin
 // that asked for them. `indent` is where the first column starts and `step`
@@ -201,6 +192,14 @@
   ))
   body
 }
+
+// An image fitted to the whole slide, from `size=full` on an image block.
+// A slide is already a page, so "its own page" means filling this one; the
+// image keeps its proportions inside the room the text would have had.
+#let imagefull(path) = align(
+  center + horizon,
+  image(path, width: text-width, height: room, fit: "contain"),
+)
 
 // A rule across the grid, from `---` on a line of its own.
 #let rule() = ascii((( ("─" * cfg.columns, "faint"), ),))

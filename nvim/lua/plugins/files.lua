@@ -27,29 +27,34 @@ return {
         filtered_items = { hide_dotfiles = true, hide_gitignored = false },
         commands = {
           -- PDFs are not text, so the tree does not open them as one: they
-          -- open in tpv (writing/tpv - the pdf viewer this repo grew
-          -- because nothing else runs in a terminal on Windows), in a
+          -- open in the viewer (writing/viewer - the pdf viewer this repo
+          -- grew because nothing else runs in a terminal on Windows), in a
           -- wezterm pane beside the editor, or in a wezterm window of its
           -- own when there is no pane to be had.
           open = function(state)
             local node = state.tree:get_node()
             if node.type == "file" and node.name:lower():match("%.pdf$") then
-              -- tpv ships beside this config, one level up from the real
-              -- nvim folder behind the junction
-              -- (on the nas, `tpv` on the path runs it through its venv; the
-              -- wezterm pane it wants is still on the far side of ssh, so
-              -- there this only reports that wezterm is missing)
-              local config = vim.uv.fs_realpath(vim.fn.stdpath("config")) or vim.fn.stdpath("config")
-              local view = vim.fn.has("win32") == 1
-                and { "python", vim.fs.dirname(config) .. "/tpv/tpv.py", node.path }
-                or { "tpv", node.path }
+              -- the viewer ships beside this config; writing.tool works out
+              -- how to run it (on the nas that is the shim, which knows its
+              -- venv)
+              local view = vim.list_extend(require("writing").tool("viewer"), { node.path })
+              -- Over ssh to the nas there is no wezterm on this side to hold
+              -- a pane: it is the terminal back on the windows machine. Ask
+              -- first, because vim.system raises when the command is not
+              -- there at all rather than calling back with a code, and an
+              -- error is no way to say "open it in your other session".
+              if vim.fn.executable("wezterm") == 0 then
+                vim.notify("no wezterm here to put the viewer in; run  "
+                  .. table.concat(view, " ") .. "  in another session")
+                return
+              end
               vim.system(
                 vim.list_extend({ "wezterm", "cli", "split-pane", "--right", "--percent", "50", "--" }, view),
                 {},
                 function(out)
                   if out.code ~= 0 then
-                    -- not inside wezterm, or its mux would not answer:
-                    -- a window of tpv's own instead
+                    -- inside no wezterm pane, or its mux would not answer:
+                    -- a window of the viewer's own instead
                     vim.system(vim.list_extend({ "wezterm", "start", "--" }, view))
                   end
                 end

@@ -7,9 +7,106 @@ import re
 EIGHTHS_H = " ▏▎▍▌▋▊▉█"  # a bar growing to the right, in eighths
 EIGHTHS_V = " ▁▂▃▄▅▆▇█"  # a bar growing upward, in eighths
 
+TONES = ("fg", "dim", "faint")  # the three inks a deck writes in
+
+
+# --- lines of segments -------------------------------------------------------
+#
+# What a plugin returns is a list of lines, and a line is a list of
+# (text, tone) pairs - a run of characters and the ink it is drawn in. These
+# are the operations every plugin that draws wants on them.
+
+
+class Drawing(list):
+    """Lines, with names to be set over the columns turned a quarter turn.
+
+    A plugin returns lines either way; this is a list like any other, and
+    carries the names along for slides.py to find. See `turned`.
+    """
+
+    turned = None
+
+
+def turned(lines, indent, step, names):
+    """`lines`, asking for `names` above its columns. `indent` is how many
+    characters in the first column starts and `step` how wide each one is,
+    both in the block's own characters."""
+    out = Drawing(lines)
+    out.turned = {"indent": indent, "step": step, "names": list(names)}
+    return out
+
+
+def segments(cells):
+    """A row of (character, tone) cells as (text, tone) runs: the neighbours
+    sharing an ink are joined, since that is one piece of text to set."""
+    segs, run, tone = [], "", None
+    for ch, t in cells:
+        if t != tone and run:
+            segs.append((run, tone))
+            run = ""
+        run += ch
+        tone = t
+    if run:
+        segs.append((run, tone))
+    return segs
+
+
+def width(segs):
+    """How many characters a line takes."""
+    return sum(len(t) for t, _ in segs)
+
+
+def pad(segs, to):
+    """The same line, blank-filled to `to` characters."""
+    short = to - width(segs)
+    return segs + [(" " * short, "fg")] if short > 0 else segs
+
+
+def trim_row(segs):
+    """The same line with its trailing blanks off, cut inside a segment
+    where one straddles the end. Never empty: a line has to be something."""
+    keep = len("".join(t for t, _ in segs).rstrip())
+    out, at = [], 0
+    for text, tone in segs:
+        if at >= keep:
+            break
+        out.append((text[: keep - at], tone))
+        at += len(text)
+    return out or [(" ", "fg")]
+
+
+def trim(lines):
+    """A drawing with the empty space round it dropped: blank rows off the
+    top and bottom, the blank left every row shares, and each row's tail."""
+    lines = list(lines)
+
+    def blank(segs):
+        return not "".join(t for t, _ in segs).strip()
+
+    while lines and blank(lines[0]):
+        lines.pop(0)
+    while lines and blank(lines[-1]):
+        lines.pop()
+    if not lines:
+        return []
+    lead = min(len(j) - len(j.lstrip())
+               for j in ("".join(t for t, _ in segs) for segs in lines))
+    out = []
+    for segs in lines:
+        cut, kept = lead, []
+        for text, tone in segs:
+            if cut >= len(text):
+                cut -= len(text)
+                continue
+            kept.append((text[cut:], tone))
+            cut = 0
+        out.append(trim_row(kept))
+    return out
+
 
 class Number(float):
-    """A number that remembers how the deck wrote it.
+    """A number from text - 42, 4.2, 60%, 3/5, 1,200 - that remembers how
+    the deck wrote it.
 
     A chart prints its figures back to the reader, and rounding them into a
     tidier shape loses what the writer said: 50.0 is not 50, and a share
@@ -33,11 +130,6 @@ def _value(s):
     return float(s)
 
 
-def number(s):
-    """A number from text: 42, 4.2, 60%, 3/5, 1,200."""
-    return Number(s)
-
-
 def fmt(x):
     """A number as the deck wrote it, or, for one this file worked out
     rather than read, as it would be written by hand: 42, 4.2, 0.35, 1200."""
@@ -50,7 +142,7 @@ def fmt(x):
 
 def is_number(s):
     try:
-        number(s)
+        Number(s)
     except ValueError:
         return False
     return True
@@ -99,7 +191,7 @@ def rows(body, most=1):
                                  f"{len(tail)}")
             keep = len(tail) - count  # the rest were part of the label all along
             label = head[0] if q else " ".join(head + tail[:keep])
-            out.append((label.strip(), [number(t) for t in tail[keep:]]))
+            out.append((label.strip(), [Number(t) for t in tail[keep:]]))
         return out
 
     if settled:
@@ -150,18 +242,16 @@ def _ends(values, top, length):
     return out
 
 
-def nested_h(values, top, width, tones):
+def nested_h(values, top, room, tones):
     """One row of nested horizontal bars as (text, tone) segments, padded to
-    `width`. `tones` gives a tone per value, in the order they were written."""
+    `room` characters. `tones` gives a tone per value, in the order they
+    were written."""
     segs = []
-    for i, start, end, partial in _ends(values, top, width):
+    for i, start, end, partial in _ends(values, top, room):
         text = "█" * (end - start) + (partial or "")
         if text:
             segs.append((text, tones[i]))
-    drawn = sum(len(t) for t, _ in segs)
-    if drawn < width:
-        segs.append((" " * (width - drawn), "fg"))
-    return segs
+    return pad(segs, room)
 
 
 def nested_v(values, top, height, tones):

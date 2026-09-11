@@ -13,6 +13,12 @@ return {
       cmdline = { view = "cmdline" }, -- bottom line, and only while typing
       messages = { view = "mini", view_error = "mini", view_warn = "mini" },
       notify = { enabled = false },
+      -- The completion menu stays neovim's own. Noice draws it with nui
+      -- instead, in a window sized to its widest entry and capped at its
+      -- own 20 rows, so `pumheight` does nothing and every row is cut with
+      -- an ellipsis to fit; the built-in one is the small tab beside the
+      -- word that lua/references.lua wants, and the theme already colours it.
+      popupmenu = { enabled = false },
       lsp = { progress = { enabled = false } },
       presets = { bottom_search = true, long_message_to_split = true },
     },

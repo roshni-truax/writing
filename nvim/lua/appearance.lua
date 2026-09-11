@@ -1,5 +1,15 @@
 -- Which background to start with, and the colorscheme applied.
 --
+-- Colour is 24-bit, said outright rather than left to be worked out. The
+-- compiled theme carries rgb and nothing else - `Normal` is `fg = 12303291`,
+-- with no cterm colour anywhere in it - so without this there is no colour
+-- at all, just undifferentiated text. Neovim turns it on by itself when it
+-- can tell the terminal is up to it, and over ssh to the nas it cannot:
+-- $COLORTERM is not forwarded, and the answer to its own query arrives too
+-- late for a config that has already drawn. Every terminal this is opened
+-- in is wezterm, so there is nothing to detect.
+vim.o.termguicolors = true
+--
 -- On startup 'background' is taken from the terminal, so opening the editor
 -- in a light window gives a light editor, alt+b included.
 --

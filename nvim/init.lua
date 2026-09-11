@@ -95,3 +95,4 @@ end
 require("keymaps")
 require("proofread")
 require("export")
+require("references").setup()

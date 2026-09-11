@@ -29,6 +29,8 @@ import heapq
 import math
 import re
 
+import _draw
+
 
 POINT = r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)"
 NODE = re.compile(rf"^{POINT}\s+(.+)$")
@@ -112,7 +114,7 @@ def render(body, args, opts, width):
     for a, b, kind in edges:
         draw_edge(grid, rings, blocked, used, boxes, nodes, a, b, kind, height, span, taken)
 
-    return trim([segments(r) for r in grid])
+    return _draw.trim(_draw.segments(r) for r in grid)
 
 
 def fmt_point(p):
@@ -243,48 +245,3 @@ def route(start, end, blocked, used, height, span):
             counter += 1
             heapq.heappush(frontier, (cost + h, cost, n, nd, cell))
     return None
-
-
-def segments(row):
-    segs, run, tone = [], "", None
-    for ch, t in row:
-        if t != tone and run:
-            segs.append((run, tone))
-            run = ""
-        run += ch
-        tone = t
-    if run:
-        segs.append((run, tone))
-    return segs
-
-
-def trim(lines):
-    """Drop the margin: empty rows top and bottom, empty columns left."""
-    def blank(segs):
-        return all(not t.strip() for t, _ in segs)
-    while lines and blank(lines[0]):
-        lines.pop(0)
-    while lines and blank(lines[-1]):
-        lines.pop()
-    lead = min(len("".join(t for t, _ in segs)) - len("".join(t for t, _ in segs).lstrip())
-               for segs in lines)
-    out = []
-    for segs in lines:
-        cut = lead
-        new = []
-        for t, tone in segs:
-            if cut >= len(t):
-                cut -= len(t)
-                continue
-            new.append((t[cut:], tone))
-            cut = 0
-        text = "".join(t for t, _ in new).rstrip()
-        # trim the right edge too, keeping the segment tones
-        kept, n = [], 0
-        for t, tone in new:
-            if n >= len(text):
-                break
-            kept.append((t[: len(text) - n], tone))
-            n += len(t)
-        out.append(kept or [(" ", "fg")])
-    return out
