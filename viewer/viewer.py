@@ -49,8 +49,13 @@ import sys
 import threading
 import time
 
+# ctypes everywhere, msvcrt only where there is one: the console structures
+# below are then defined on every platform, so a mistake in them - a name a
+# nested class could not see, say - is found by reading this file anywhere
+# rather than only on Windows, where it is hardest to go and look.
+import ctypes
+
 if os.name == "nt":
-    import ctypes
     import msvcrt
 else:
     import select
@@ -770,113 +775,113 @@ class Viewer:
         self.scroll = self.tops[target]
         self.clamp()
 
-if os.name == "nt":
-    class ConsoleInput:
-        # msvcrt throws away KEY_EVENT_RECORD.wRepeatCount: while a frame is
-        # drawing, Windows coalesces queued key repeats into one record with a
-        # count, and reading only the character loses the rest. Measured, that
-        # was 12 of every 31 generated repeats surviving - scrolling felt like
-        # 12Hz because most of it was quietly discarded. Reading the input
-        # records directly keeps every step the keyboard actually made.
+# The console's own input records. Written out here rather than inside the
+# class that reads them, because a class body cannot see the names in the
+# class body around it: a structure nested there naming another one raises
+# NameError as the file is read, on Windows and nowhere else.
+class COORD(ctypes.Structure):
+    _fields_ = [("X", ctypes.c_int16), ("Y", ctypes.c_int16)]
 
-        class KEY_EVENT(ctypes.Structure):
-            _fields_ = [
-                ("bKeyDown", ctypes.c_int32),
-                ("wRepeatCount", ctypes.c_uint16),
-                ("wVirtualKeyCode", ctypes.c_uint16),
-                ("wVirtualScanCode", ctypes.c_uint16),
-                ("UnicodeChar", ctypes.c_wchar),
-                ("dwControlKeyState", ctypes.c_uint32),
-            ]
 
-        class COORD(ctypes.Structure):
-            _fields_ = [("X", ctypes.c_int16), ("Y", ctypes.c_int16)]
+class KEY_EVENT(ctypes.Structure):
+    _fields_ = [
+        ("bKeyDown", ctypes.c_int32),
+        ("wRepeatCount", ctypes.c_uint16),
+        ("wVirtualKeyCode", ctypes.c_uint16),
+        ("wVirtualScanCode", ctypes.c_uint16),
+        ("UnicodeChar", ctypes.c_wchar),
+        ("dwControlKeyState", ctypes.c_uint32),
+    ]
 
-        class MOUSE_EVENT(ctypes.Structure):
-            _fields_ = [
-                ("dwMousePosition", COORD),
-                ("dwButtonState", ctypes.c_uint32),
-                ("dwControlKeyState", ctypes.c_uint32),
-                ("dwEventFlags", ctypes.c_uint32),
-            ]
 
-        class EVENT(ctypes.Union):
-            pass
+class MOUSE_EVENT(ctypes.Structure):
+    _fields_ = [
+        ("dwMousePosition", COORD),
+        ("dwButtonState", ctypes.c_uint32),
+        ("dwControlKeyState", ctypes.c_uint32),
+        ("dwEventFlags", ctypes.c_uint32),
+    ]
 
-        class INPUT_RECORD(ctypes.Structure):
-            pass
 
-        def __init__(self):
-            self.EVENT._fields_ = [
-                ("KeyEvent", ConsoleInput.KEY_EVENT),
-                ("MouseEvent", ConsoleInput.MOUSE_EVENT),
-            ]
-            self.INPUT_RECORD._fields_ = [
-                ("EventType", ctypes.c_uint16),
-                ("Event", ConsoleInput.EVENT),
-            ]
-            self.pointer = []
-            self.k32 = ctypes.windll.kernel32
-            self.handle = self.k32.GetStdHandle(-10)
-            # The console reports the mouse only when asked, and only once
-            # quick edit is off - quick edit takes a drag for itself and
-            # makes a selection of its own out of it. Clearing it needs the
-            # extended flag set in the same call. Untested on windows; the
-            # linux half is what this was built against.
-            self.mode = ctypes.c_uint32()
-            if self.k32.GetConsoleMode(self.handle, ctypes.byref(self.mode)):
-                ENABLE_MOUSE_INPUT, ENABLE_EXTENDED_FLAGS = 0x0010, 0x0080
-                ENABLE_QUICK_EDIT_MODE = 0x0040
-                wanted = (self.mode.value | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS)
-                self.k32.SetConsoleMode(self.handle, wanted & ~ENABLE_QUICK_EDIT_MODE)
+class EVENT(ctypes.Union):
+    _fields_ = [("KeyEvent", KEY_EVENT), ("MouseEvent", MOUSE_EVENT)]
 
-        def read(self):
-            # every pending (char, repeat_count) keydown; [] when nothing waits
-            n = ctypes.c_uint32(0)
-            if not self.k32.GetNumberOfConsoleInputEvents(self.handle, ctypes.byref(n)) or n.value == 0:
-                return []
-            records = (self.INPUT_RECORD * n.value)()
-            got = ctypes.c_uint32(0)
-            if not self.k32.ReadConsoleInputW(self.handle, records, n.value, ctypes.byref(got)):
-                return []
-            events = []
-            for rec in records[: got.value]:
-                if rec.EventType == 1 and rec.Event.KeyEvent.UnicodeChar != "\x00":
-                    # key-ups travel too: a release is a fact worth knowing
-                    events.append((
-                        rec.Event.KeyEvent.UnicodeChar,
-                        max(1, rec.Event.KeyEvent.wRepeatCount),
-                        bool(rec.Event.KeyEvent.bKeyDown),
-                    ))
-                elif rec.EventType == 2:  # MOUSE_EVENT
-                    self.pointer.append(self.pointer_from(rec.Event.MouseEvent))
-            return [e for e in events]
 
-        @staticmethod
-        def pointer_from(ev):
-            """One console mouse record, in the shape the linux half sends.
+class INPUT_RECORD(ctypes.Structure):
+    _fields_ = [("EventType", ctypes.c_uint16), ("Event", EVENT)]
 
-            dwEventFlags says what happened: 0 a button changed, 1 the
-            mouse moved, 4 the wheel turned, and the wheel's direction is
-            the sign of the high word of the button state.
-            """
-            col, row = ev.dwMousePosition.X, ev.dwMousePosition.Y
-            MOUSE_MOVED, MOUSE_WHEELED = 0x0001, 0x0004
-            if ev.dwEventFlags & MOUSE_WHEELED:
-                up = ctypes.c_int32(ev.dwButtonState).value > 0
-                return ("wheel-up" if up else "wheel-down", col, row)
-            held = ev.dwButtonState & 0x0001  # the left button
-            if ev.dwEventFlags & MOUSE_MOVED:
-                return ("drag" if held else "move", col, row)
-            return ("press" if held else "release", col, row)
 
-        def mouse(self):
-            out, self.pointer = self.pointer, []
-            return out
+class ConsoleInput:
+    # msvcrt throws away KEY_EVENT_RECORD.wRepeatCount: while a frame is
+    # drawing, Windows coalesces queued key repeats into one record with a
+    # count, and reading only the character loses the rest. Measured, that
+    # was 12 of every 31 generated repeats surviving - scrolling felt like
+    # 12Hz because most of it was quietly discarded. Reading the input
+    # records directly keeps every step the keyboard actually made.
 
-        def restore(self):
-            if getattr(self, "mode", None) is not None:
-                self.k32.SetConsoleMode(self.handle, self.mode.value)
+    def __init__(self):
+        self.pointer = []
+        self.k32 = ctypes.windll.kernel32
+        self.handle = self.k32.GetStdHandle(-10)
+        # The console reports the mouse only when asked, and only once
+        # quick edit is off - quick edit takes a drag for itself and
+        # makes a selection of its own out of it. Clearing it needs the
+        # extended flag set in the same call. Untested on windows; the
+        # linux half is what this was built against.
+        self.mode = ctypes.c_uint32()
+        if self.k32.GetConsoleMode(self.handle, ctypes.byref(self.mode)):
+            ENABLE_MOUSE_INPUT, ENABLE_EXTENDED_FLAGS = 0x0010, 0x0080
+            ENABLE_QUICK_EDIT_MODE = 0x0040
+            wanted = (self.mode.value | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS)
+            self.k32.SetConsoleMode(self.handle, wanted & ~ENABLE_QUICK_EDIT_MODE)
+
+    def read(self):
+        # every pending (char, repeat_count) keydown; [] when nothing waits
+        n = ctypes.c_uint32(0)
+        if not self.k32.GetNumberOfConsoleInputEvents(self.handle, ctypes.byref(n)) or n.value == 0:
+            return []
+        records = (INPUT_RECORD * n.value)()
+        got = ctypes.c_uint32(0)
+        if not self.k32.ReadConsoleInputW(self.handle, records, n.value, ctypes.byref(got)):
+            return []
+        events = []
+        for rec in records[: got.value]:
+            if rec.EventType == 1 and rec.Event.KeyEvent.UnicodeChar != "\x00":
+                # key-ups travel too: a release is a fact worth knowing
+                events.append((
+                    rec.Event.KeyEvent.UnicodeChar,
+                    max(1, rec.Event.KeyEvent.wRepeatCount),
+                    bool(rec.Event.KeyEvent.bKeyDown),
+                ))
+            elif rec.EventType == 2:  # MOUSE_EVENT
+                self.pointer.append(self.pointer_from(rec.Event.MouseEvent))
+        return [e for e in events]
+
+    @staticmethod
+    def pointer_from(ev):
+        """One console mouse record, in the shape the linux half sends.
+
+        dwEventFlags says what happened: 0 a button changed, 1 the
+        mouse moved, 4 the wheel turned, and the wheel's direction is
+        the sign of the high word of the button state.
+        """
+        col, row = ev.dwMousePosition.X, ev.dwMousePosition.Y
+        MOUSE_MOVED, MOUSE_WHEELED = 0x0001, 0x0004
+        if ev.dwEventFlags & MOUSE_WHEELED:
+            up = ctypes.c_int32(ev.dwButtonState).value > 0
+            return ("wheel-up" if up else "wheel-down", col, row)
+        held = ev.dwButtonState & 0x0001  # the left button
+        if ev.dwEventFlags & MOUSE_MOVED:
+            return ("drag" if held else "move", col, row)
+        return ("press" if held else "release", col, row)
+
+    def mouse(self):
+        out, self.pointer = self.pointer, []
+        return out
+
+    def restore(self):
+        if getattr(self, "mode", None) is not None:
+            self.k32.SetConsoleMode(self.handle, self.mode.value)
 
 class TerminalInput:
     # The Linux half of the keyboard: stdin taken out of line mode so keys
