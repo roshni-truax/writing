@@ -31,6 +31,10 @@ map("n", "<leader>b", function()
   vim.o.background = vim.o.background == "dark" and "light" or "dark"
 end, { desc = "light / dark" })
 
+-- writing mode: the file in a narrow column, the statusline gone. see
+-- lua/plugins/zen.lua
+map("n", "<leader>z", "<cmd>ZenMode<cr>", { desc = "writing mode" })
+
 -- the everyday two
 map("n", "<leader>w", "<cmd>write<cr>", { desc = "write" })
 map("n", "<leader>q", "<cmd>quit<cr>", { desc = "quit" })

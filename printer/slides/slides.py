@@ -700,7 +700,11 @@ def render(source, meta, body, output=None, typ_only=False, font_path=None):
         return None
 
     output = os.path.abspath(output or os.path.splitext(source)[0] + ".pdf")
-    cmd = ["typst", "compile", "-", output]
+    # set beside where it is going and renamed onto it, so the viewer never
+    # catches the file half written - printer.replacing says why at length
+    folder, name = os.path.split(output)
+    part = os.path.join(folder, "." + os.path.splitext(name)[0] + ".part.pdf")
+    cmd = ["typst", "compile", "-", part]
     if font_path:
         cmd += ["--font-path", font_path]
     # from the deck's own folder, so an image path in it resolves
@@ -708,6 +712,10 @@ def render(source, meta, body, output=None, typ_only=False, font_path=None):
                           cwd=os.path.dirname(os.path.abspath(source)),
                           capture_output=True)
     stderr = proc.stderr.decode("utf-8", "replace")
+    if proc.returncode == 0:
+        os.replace(part, output)
+    elif os.path.exists(part):
+        os.remove(part)  # the run failed; leave the old pdf where it is
     if proc.returncode != 0:
         # a slide that does not fit is the one failure with something useful
         # to say; typst wraps it in a traceback nobody needs

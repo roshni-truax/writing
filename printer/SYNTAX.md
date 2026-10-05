@@ -36,7 +36,9 @@ every switch is `true` or `false`, and nothing else.
 slides: false         set it as a deck rather than a manuscript
 theme:                the grounds and inks, from palette/zenwritten.json.
                       dark or light, and it means the same to both kinds.
-                      prose defaults to light, a deck to dark
+                      prose defaults to light, a deck to dark. a light
+                      manuscript is set on white paper rather than the
+                      screen's #EEEEEE ground; the ink is the theme's
 ```
 
 # prose
@@ -47,6 +49,12 @@ theme:                the grounds and inks, from palette/zenwritten.json.
 and a document setting one wins over it.
 
 ```
+spacing: internet     internet sets a gap between paragraphs and no
+                      indent; traditional indents each paragraph's first
+                      line and closes the gap, so the column runs
+                      unbroken. either way the first paragraph of a
+                      chapter, and the one after a scene break, an image
+                      or a line of air, stays unindented
 skip-numbering: 0     that many opening pages carry no number, and the
                       count starts after them, so with 1 the second page
                       is "1"
@@ -54,7 +62,7 @@ references:           the file the sources come from, relative to the
                       document. references.json beside it by default, and
                       nothing at all if there is no such file
 papersize: a5         the page
-fontsize: 10pt        the body size
+fontsize: 9.5pt      the body size
 linestretch: 1.15     the leading, matching the screen's
 margin:               horizontal and vertical set both of their sides;
   horizontal: 1.6cm   top, bottom, left and right set one each. book
@@ -66,17 +74,28 @@ margin:               horizontal and vertical set both of their sides;
 
 ```
 a blank line          the ordinary paragraph break
-each one after it     one line of air, the body's own leading, as
-                      `#v(1.15em)`; markdown would collapse the run. a run
+each one after it     one line of air, the body's own leading; markdown
+                      would collapse the run. traditional spacing sets it
+                      as an empty block of that height rather than `#v`,
+                      so the paragraph under it opens flush left. a run
                       at either end of the file is dropped, and one inside
                       a fenced or indented code block is left as it is
 ---                   a scene break: a short faded stroke, centered, 14% of
                       the line, with 2.6em of air either side
+--- the morning ---   a break with something written in it: a faded hairline
+                      the whole width of the text block, the words sitting
+                      in a gap in the middle of it, same air either side.
+                      the editor draws it the same way, and gives the
+                      dashes back while the cursor is on the line
 two trailing spaces   markdown's own hard break
-> a quotation         set at the size a footnote is, behind a dim hairline
-                      at its left, with air either side. the words stay the
-                      body's own ink, as they do on a slide; the rule runs
-                      the whole way down, however many paragraphs it holds
+> a quotation         set at the size a footnote is, indented, with air
+                      either side. the words stay the body's own ink, as
+                      they do on a slide. internet spacing puts a faint
+                      hairline at its left, running the whole way down
+                      however many paragraphs it holds, and 1.7em of air;
+                      traditional drops the rule - the indent already says
+                      it is a quotation - and takes 1.2em. a deck's rule is
+                      dim, not faint
 - item                a list, drawn • ◦ ‣ ▪ and round again after the
                       fourth, the same four a deck sets and the editor
                       draws while you write it

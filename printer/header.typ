@@ -14,7 +14,7 @@
 #set text(
   font: "JetBrainsMono NFM",
   weight: 200,
-  tracking: -0.01em,
+  tracking: -0.03em,
 )
 
 // Bold on screen is drawn ExtraBold (800) by wezterm; match it in print. The
@@ -25,9 +25,22 @@
 // Code spans and blocks in the same family as the body.
 #show raw: set text(font: "JetBrainsMono NFM")
 
-// Air between paragraphs: typst's default is 1.2em, which reads as barely
-// more than a line break at this leading.
-#set par(spacing: 1.7em)
+// How one paragraph is told from the next. printer.py sets `par-spacing`
+// and `par-indent` just ahead of this, out of the document's `spacing`:
+//
+//   internet      a gap between paragraphs and no indent. 1.7em, since
+//                 typst's own 1.2em reads as barely more than a line
+//                 break at this leading
+//   traditional   the first line indented and no gap: the spacing is the
+//                 leading itself, so the column runs unbroken
+//
+// `all: false` is what leaves the first paragraph of a chapter, and the
+// one after a scene break or an image, unindented, which is how a book
+// sets them.
+#set par(
+  spacing: par-spacing,
+  first-line-indent: (amount: par-indent, all: false),
+)
 
 // The page number, faded and tucked into the lower right. Set here rather
 // than fighting the template: conf only touches paper, margin, numbering and
@@ -93,14 +106,49 @@
 // left. Typst's own is indented from both margins at the body size and
 // carries no rule, which reads as a paragraph that has wandered inwards
 // rather than as someone else speaking.
+//
+// The rule is `faint` rather than `dim`: it marks where the quotation runs
+// and has nothing to say on its own. The words stay the body's ink, and
+// the deck's rule is still dim - roshni's call, prose only.
+//
+// Under traditional spacing there is no rule at all and a little less air
+// either side: printer.py sets `quote-rule` to `none` and `quote-air`
+// shorter. A column with no gaps between its paragraphs needs only the
+// indent to say a quotation has started, and the rule beside it reads as a
+// second announcement of the same thing.
 #let quote-size = 0.85em  // typst's own footnote size, so the two agree
 #show quote.where(block: true): it => block(
   width: 100%,
-  above: 1.7em,
-  below: 1.7em,
+  above: quote-air,
+  below: quote-air,
   inset: (left: 1.2em),
-  stroke: (left: 0.5pt + dim),
+  stroke: if quote-rule == none { none } else { (left: 0.5pt + quote-rule) },
   text(size: quote-size, it.body),
+)
+
+// A labelled break (`--- the next morning ---` in markdown, emitted as
+// `#labelled(..)`): a hairline the whole width of the text block with the
+// words sitting in a gap in the middle of it, everything in dim. Where a
+// plain `---` is a pause in the telling, this one says what comes next -
+// a part title, a date, a change of place - so it takes the full measure
+// rather than the short centred stroke, and keeps the same air either side.
+#let labelled(label) = block(
+  width: 100%,
+  above: 2.6em,
+  below: 2.6em,
+  {
+    let rule = box(width: 1fr, line(
+      length: 100%,
+      stroke: (paint: dim, thickness: 0.5pt),
+    ))
+    grid(
+      columns: (1fr, auto, 1fr),
+      align: horizon,
+      rule,
+      box(inset: (x: 0.9em), text(fill: dim, label)),
+      rule,
+    )
+  },
 )
 
 // Scene breaks (`---` in markdown, emitted as `#divider()`): a short stroke

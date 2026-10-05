@@ -14,11 +14,13 @@ Both kinds open with the same frontmatter: a fenced block on the first line,
 `key: value` a line at a time. Prose reads
 
   theme: light          or dark; the grounds and inks the deck half uses
+  spacing: internet     or traditional: a space between paragraphs and no
+                        indent, or an indented first line and no space
   skip-numbering: 1     that many opening pages carry no number, and the
                         count starts after them, so with 1 the second page
                         is "1"
   papersize: a5
-  fontsize: 10pt
+  fontsize: 9.5pt
   linestretch: 1.15
   margin:               horizontal, vertical, top, bottom, left, right
     horizontal: 1.6cm
@@ -28,6 +30,8 @@ Beyond markdown itself, prose reads:
   a blank line          the ordinary paragraph break
   each one after        a line of air, one line of the body's leading
   ---                   a scene break: a short faded stroke, not a rule
+  --- the morning ---   the same break with words in it: a full-width
+                        hairline, the words in a gap in the middle
   ##                    a chapter, with a pause under it; # is the book
   > a quotation         footnote-sized, behind a hairline at its left
 
@@ -43,6 +47,7 @@ out in SYNTAX.md beside this file.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -65,13 +70,57 @@ PALETTE = os.path.join(os.path.dirname(HERE), "palette", "zenwritten.json")
 MARGINS = {"horizontal": "x", "vertical": "y", "top": "top",
            "bottom": "bottom", "left": "left", "right": "right"}
 BLOCK = re.compile(r"^(`{3,}|~{3,})\s*(.*)$")
+# a scene break with something written in it: --- the next morning ---
+LABELLED = re.compile(r"^-{3,}\s+(\S.*?)\s+-{3,}$")
 # a citation or a note, and not one whose braces were escaped
 CITE = re.compile(r"(?<!\\)\{\{(.*?)\}\}", re.S)
 HANGING = "1.5em"  # the indent a bibliography entry's later lines take
+# Paper is white, whatever the light theme's ground is. The editor's light
+# ground is #EEEEEE, which is right on a screen and reads as a grey page in
+# print; the ink, the dim and the faint still come from the theme, so a
+# manuscript is set in the colours it was written in on paper that looks
+# like paper. A dark manuscript keeps its own ground.
+PAPER = "#FFFFFF"
+SPACING = ("internet", "traditional")  # how one paragraph is told from the next
+INDENT = "1.5em"  # a traditional paragraph's first line
+AIR = "1.7em"  # an internet paragraph's gap, the one header.typ is written around
+# the air either side of a block quotation. Traditional spacing sets the
+# page as one unbroken column, so a quotation takes less of a run-up.
+QUOTE_AIR = {"internet": "1.7em", "traditional": "1.2em"}
 
 
 class PrintError(Exception):
     pass
+
+
+def part_path(output):
+    """The hidden file a pdf is set in before it is moved into place."""
+    folder, name = os.path.split(output)
+    return os.path.join(folder, "." + os.path.splitext(name)[0] + ".part.pdf")
+
+
+@contextlib.contextmanager
+def replacing(output):
+    """Somewhere to set the pdf, moved onto `output` once it is whole.
+
+    Pandoc and typst both write a pdf straight to where it is going, over
+    several writes for anything long or carrying an image, so for a moment
+    the file on disk is half a document. The viewer watches that file and
+    reloads the instant it changes, and a half-written pdf is what pdfium
+    calls a data format error - which used to kill it. Writing beside the
+    destination and renaming makes the swap atomic: the viewer sees the old
+    pdf or the new one, never a part of either. The temporary file has to
+    be in the same folder, since a rename across filesystems is a copy, and
+    it keeps the .pdf on the end: pandoc reads the extension to decide what
+    it is writing, and anything else makes it quietly write html.
+    """
+    part = part_path(output)
+    try:
+        yield part
+        os.replace(part, output)
+    finally:
+        if os.path.exists(part):
+            os.remove(part)  # the run failed; leave the old pdf where it is
 
 
 def palette(name):
@@ -129,6 +178,36 @@ def blocks(lines, sources=None):
     return out
 
 
+def labelled(lines):
+    """`--- the next morning ---` as a rule with the words in it.
+
+    Markdown has no such thing - it reads the line as a paragraph of text -
+    so it is turned into raw typst here, and `header.typ` decides how it is
+    drawn. A plain `---` is left alone: that is markdown's own scene break
+    and it stays the short centred stroke it has always been. Code is left
+    alone the way every other pass here leaves it alone.
+    """
+    out, fence = [], None
+    for line in lines:
+        m = re.match(r"^\s*(`{3,}|~{3,})", line)
+        mark = m.group(1) if m else None
+        if fence:
+            if mark and mark[0] == fence[0] and len(mark) >= len(fence):
+                fence = None
+            out.append(line)
+            continue
+        if mark:
+            fence = mark
+            out.append(line)
+            continue
+        found = LABELLED.match(line)
+        if found:
+            out += ["```{=typst}", f"#labelled({q(found.group(1))})", "```"]
+        else:
+            out.append(line)
+    return out
+
+
 def cited(lines, sources):
     """The body with every `{{…}}` turned into a footnote.
 
@@ -171,10 +250,17 @@ def bibliography(sources):
     """The sources cited, alphabetical, each hanging under its first line."""
     if not sources or not sources.used:
         raise PrintError("a ```references block with nothing cited above it")
-    out = ["```{=typst}", f"#set par(hanging-indent: {HANGING})", "```", ""]
+    # a bibliography hangs the other way round from a traditional
+    # paragraph, so the first-line indent comes off for the length of it
+    out = ["```{=typst}",
+           f"#set par(hanging-indent: {HANGING}, first-line-indent: 0em)",
+           "```", ""]
     for entry in sources.bibliography():
         out += [entry, ""]
-    return out + ["```{=typst}", "#set par(hanging-indent: 0em)", "```", ""]
+    return out + ["```{=typst}",
+                  "#set par(hanging-indent: 0em, first-line-indent: "
+                  "(amount: par-indent, all: false))",
+                  "```", ""]
 
 
 def typst_block(word, info):
@@ -202,14 +288,15 @@ def q(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def spaced(lines):
+def spaced(lines, air):
     """The text with its blank lines kept.
 
     Markdown collapses any run of blank lines into one paragraph break, so
     each one past the first is turned into a line of air: a raw typst block,
-    which pandoc hands to the typesetter untouched. `#v` adds to the
-    paragraph spacing rather than replacing it (measured), so two blank
-    lines read as the usual gap plus one empty line. A run at the top or
+    which pandoc hands to the typesetter untouched. `air` is how the
+    document's spacing draws that line, and it adds to the paragraph
+    spacing rather than replacing it (measured), so two blank lines read as
+    the usual gap plus one empty line. A run at the top or
     bottom of the file is dropped, and code keeps its own blanks.
     """
     out, i, n = [], 0, len(lines)
@@ -237,7 +324,7 @@ def spaced(lines):
             out.append("")
             if j - i > 1 and seen and j < n and not indented:
                 out.append("```{=typst}")
-                out.append(f"#v({(j - i - 1) * LEADING:.2f}em)")
+                out.append(air(j - i - 1))
                 out.append("```")
                 out.append("")
             i = j
@@ -248,6 +335,51 @@ def spaced(lines):
     return out
 
 
+def page_defaults():
+    """meta.yaml: the page a manuscript gets before its own frontmatter."""
+    with open(os.path.join(HERE, "meta.yaml"), encoding="utf-8") as f:
+        return frontmatter.parse(f.read().split("\n"))
+
+
+def spacing(meta):
+    """How paragraphs are told apart, as typst source.
+
+    `internet` is the default and what every manuscript was set with before
+    this: a gap between paragraphs, no indent. `traditional` is the book's
+    way round - the first line of each paragraph indented, and no gap, so
+    the page is one unbroken column. The gap in that case is the leading
+    itself, which is what pandoc's template makes of `linestretch`, so the
+    lines of one paragraph and the lines between two measure the same.
+    """
+    name = meta.get("spacing", "internet")
+    if name not in SPACING:
+        raise PrintError(f"spacing is {' or '.join(SPACING)}, not {name!r}")
+    quote = (f"#let quote-air = {QUOTE_AIR[name]}\n"
+             # the rule marks a quotation off from a page of separated
+             # paragraphs; in a traditional column the indent already does
+             # that, and a second mark is one too many
+             f"#let quote-rule = {'faint' if name == 'internet' else 'none'}\n")
+    if name == "internet":
+        # nothing is indented, so the air can be the plain vertical skip
+        return (f"#let par-spacing = {AIR}\n#let par-indent = 0em\n" + quote,
+                lambda n: f"#v({n * LEADING:.2f}em)")
+    stretch = dict(page_defaults(), **meta).get("linestretch", 1)
+    try:
+        leading = float(stretch) * 0.65
+    except (TypeError, ValueError):
+        raise PrintError(f"linestretch is a number, not {stretch!r}")
+    # A line of air reads as a break in the telling, so the paragraph under
+    # it opens like the first of a chapter: flush left. `#v` will not do
+    # that - typst only holds the indent back after a block-level element,
+    # and a skip is not one - so the air is an empty block of exactly that
+    # height instead, carrying the paragraph spacing above it and none
+    # below. Measured against `#v`, the two set the page identically; only
+    # the indent differs.
+    return (f"#let par-spacing = {leading:.4g}em\n#let par-indent = {INDENT}\n" + quote,
+            lambda n: f"#block(height: {n * LEADING:.2f}em, "
+                      f"above: {leading:.4g}em, below: 0em)[]")
+
+
 def metadata(meta):
     """The page settings as a yaml file for pandoc: meta.yaml's defaults
     with the document's own on top.
@@ -256,8 +388,7 @@ def metadata(meta):
     and y rather than horizontal and vertical, so the words are translated
     on the way through and nothing anyone edits has to know them.
     """
-    with open(os.path.join(HERE, "meta.yaml"), encoding="utf-8") as f:
-        page = frontmatter.parse(f.read().split("\n"))
+    page = page_defaults()
     margins = dict(page.get("margin") or {}, **(meta.get("margin") or {}))
     meta = dict(page, **meta)
     meta["margin"] = margins
@@ -299,31 +430,37 @@ def read_sources(source, meta):
 def prose(source, output, meta, body):
     """A manuscript as an A5 pdf, through pandoc."""
     output = os.path.abspath(output or os.path.splitext(source)[0] + ".pdf")
-    theme = palette(meta.get("theme", "light"))
+    name = meta.get("theme", "light")
+    theme = palette(name)
+    if name == "light":
+        theme = dict(theme, bg=PAPER)
+    paragraphs, air = spacing(meta)
     lines = body.split("\n")
     if lines and lines[-1] == "":
         lines.pop()  # the newline a file ends with is not a blank line
     # the citations first: a ```references block lists what they used, so it
     # cannot be set until every one of them has been read
     sources = read_sources(source, meta)
-    lines = blocks(cited(lines, sources), sources)
+    lines = blocks(cited(labelled(lines), sources), sources)
     skip = meta.get("skip-numbering")
     if skip is not None:
         # the same raw block the document used to carry itself
         if not str(skip).isdigit():
             raise PrintError(f"skip-numbering is a whole number, not {skip!r}")
         lines = ["```{=typst}", f"#skip-numbering({skip})", "```", ""] + lines
-    text = "\n".join(spaced(lines)) + "\n"
+    text = "\n".join(spaced(lines, air)) + "\n"
 
-    with tempfile.TemporaryDirectory() as tmp:
-        # the theme, ahead of header.typ, which sets the page from it
+    with tempfile.TemporaryDirectory() as tmp, replacing(output) as part:
+        # the theme and the paragraph spacing, ahead of header.typ, which
+        # sets the page from them
         ground = os.path.join(tmp, "ground.typ")
         with open(ground, "w", encoding="utf-8") as f:
             f.write("\n".join(f'#let {k} = rgb("{v}")' for k, v in theme.items()
                               if k in ("bg", "fg", "dim", "faint")) + "\n")
+            f.write(paragraphs)
         cmd = [
             "pandoc",
-            "--output=" + output,
+            "--output=" + part,
             "--pdf-engine=typst",
             # An image on its own line is just an image. Pandoc's default is
             # to promote it to a numbered figure and reprint the alt text
@@ -350,9 +487,11 @@ def prose(source, output, meta, body):
         proc = subprocess.run(cmd, input=text.encode("utf-8"),
                               cwd=os.path.dirname(os.path.abspath(source)),
                               capture_output=True)
-    stderr = proc.stderr.decode("utf-8", "replace")
-    if proc.returncode != 0:
-        raise PrintError(stderr.rstrip())
+        stderr = proc.stderr.decode("utf-8", "replace")
+        # inside the block on purpose: raising here is what stops the pdf
+        # being moved into place, so a failed run leaves the old one alone
+        if proc.returncode != 0:
+            raise PrintError(stderr.rstrip())
     sys.stderr.write(stderr)
     return output
 

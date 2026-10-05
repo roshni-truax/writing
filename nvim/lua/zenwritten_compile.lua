@@ -92,6 +92,17 @@ local function derived(bg)
     ["@markup.heading.4.markdown"] = { fg = mix(fg, ground, 0.42) },
     ["@markup.heading.5.markdown"] = { fg = mix(fg, ground, 0.60) },
     ["@markup.heading.6.markdown"] = { fg = mix(fg, ground, 0.78) },
+    -- A markdown escape is prose, not punctuation to be pointed at:
+    -- `\[` is how a bracket is written where markdown would otherwise read
+    -- a link reference. Treesitter's own `@string.escape` is bold here,
+    -- which made the bracket louder than the words around it, and an
+    -- attribute set by a highlight cannot be unset by one over the top of
+    -- it - so the group itself has to be quiet. lua/escapes.lua hides the
+    -- backslash; this is what the character it protects is drawn in.
+    ["@string.escape.markdown_inline"] = { link = "Normal" },
+    -- the word count in writing mode, in the faint ink the rules and the
+    -- slide numbers take: present, and quiet enough to look past
+    ZenWords = { fg = tonumber(INKS[bg].faint:sub(2), 16) },
     RenderMarkdownBullet = { link = "Comment" },
     RenderMarkdownDash = { link = "Comment" },
     RenderMarkdownQuote = { link = "Comment" },

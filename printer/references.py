@@ -160,6 +160,17 @@ def sentence(parts, end="."):
     return punctuate(body if body.endswith(end) else body + end)
 
 
+def closed(text):
+    """A name closed off with a period, unless it already ends in one.
+
+    "Le Guin, Ursula K." ends in an initial, and a second period after it
+    reads as a typing mistake rather than as the end of a sentence.
+    """
+    if not text:
+        return ""
+    return text if text.endswith(".") else text + "."
+
+
 def punctuate(text):
     """American practice, which Chicago follows: a comma or a period that
     falls against a closing quotation mark goes inside it."""
@@ -218,7 +229,9 @@ def bibliography_entry(entry):
     title = entry.get("title", "")
 
     if kind in ("book", "report"):
-        parts = [f"{who}." if who else "", f"{emph(title)}."]
+        parts = [closed(who), f"{emph(title)}."]
+        if entry.get("edition"):
+            parts.append(f"{escape(entry['edition'])} ed.")
         if entry.get("volume"):
             parts.append(f"Vol. {escape(entry['volume'])}.")
         if entry.get("editor"):
@@ -236,7 +249,7 @@ def bibliography_entry(entry):
         year = f"({entry['year']})" if entry.get("year") else ""
         stem = " ".join(p for p in (emph(entry.get("journal", "")), number, year) if p)
         tail = f"{stem}: {pages(entry['pages'])}." if entry.get("pages") else f"{stem}."
-        return punctuate(" ".join(p for p in (f"{who}." if who else "",
+        return punctuate(" ".join(p for p in (closed(who),
                                               f"{quoted(title)}.", tail) if p))
 
     if kind == "chapter":
@@ -244,20 +257,20 @@ def bibliography_entry(entry):
         inner = ", ".join(p for p in (editors, pages(entry.get("pages", ""))) if p)
         where = ": ".join(p for p in (entry.get("place"), entry.get("publisher")) if p)
         return punctuate(" ".join(p for p in (
-            f"{who}." if who else "", f"{quoted(title)}.",
+            closed(who), f"{quoted(title)}.",
             f"In {emph(entry.get('book', ''))}" + (f", {inner}." if inner else "."),
             ", ".join(p for p in (where, entry.get("year", "")) if p) + ".") if p))
 
     if kind == "website":
         return punctuate(" ".join(p for p in (
-            f"{who}." if who else "", f"{quoted(title)}.",
+            closed(who), f"{quoted(title)}.",
             f"{escape(entry['site'])}." if entry.get("site") else "",
             f"{escape(entry['date'])}." if entry.get("date") else "",
             f"{entry['url']}." if entry.get("url") else "") if p))
 
     if kind == "thesis":
         return punctuate(" ".join(p for p in (
-            f"{who}." if who else "", f"{quoted(title)}.",
+            closed(who), f"{quoted(title)}.",
             ", ".join(p for p in (escape(entry.get("kind", "PhD diss.")),
                                   escape(entry.get("school", "")),
                                   escape(entry.get("year", ""))) if p) + ".") if p))

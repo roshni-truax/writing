@@ -94,5 +94,8 @@ end
 
 require("keymaps")
 require("proofread")
+require("frontmatter")
+require("dividers")
+require("escapes")
 require("export")
 require("references").setup()

@@ -290,22 +290,36 @@ class Viewer:
         self.selection = None # ((page, index), (page, index)), in reading order
         self.anchor = None    # where the drag that is making it started
         self.notice = None    # a word for the status line, until the next move
-        self.load()
+        self.load(first=True)
 
     # -- document ----------------------------------------------------------
 
-    def load(self):
+    def load(self, first=False):
+        """Read the file again. True if it loaded, False if it could not.
+
+        A pdf being written is a pdf half on disk, and pdfium says so:
+        "Data format error". That is not a broken document, it is a document
+        mid-flight - a long manuscript or one with an image takes several
+        writes - so a reload that fails keeps the pages already open and
+        leaves the mtime alone, and the next check, half a second later,
+        tries again. Only the very first load has nothing to fall back on.
+        """
         try:
-            self.mtime = os.stat(self.path).st_mtime
+            mtime = os.stat(self.path).st_mtime
             with open(self.path, "rb") as f:
                 data = f.read()
-        except OSError as e:
-            raise SystemExit(f"viewer: cannot read {self.path}: {e}")
+            doc = pdfium.PdfDocument(data)  # from memory: the file stays free
+        except (OSError, pdfium.PdfiumError) as e:
+            if first:
+                raise SystemExit(f"viewer: cannot read {self.path}: {e}")
+            self.notice = "still being written"
+            return False
+        self.mtime = mtime
         from PIL import ImageChops
         with self.lock:  # the prefetcher must not be mid-render through this
             if self.doc is not None:
                 self.doc.close()
-            self.doc = pdfium.PdfDocument(data)  # from memory: the file stays free
+            self.doc = doc
             # quick thumbnails decide whether the whole document travels as
             # grayscale. Every page gets a look, not just the first: the one
             # colour plate in a text manuscript is exactly the page that
@@ -333,6 +347,7 @@ class Viewer:
                 self.tops.append(y)
                 y += h + GAP
             self.doc_h = y - GAP
+        return True
 
     def changed_on_disk(self):
         try:
@@ -1074,8 +1089,8 @@ def main():
         elif ch == "\x1b":   # esc lets the selection go
             viewer.selection, viewer.anchor, viewer.notice = None, None, None
         elif ch == "r":
-            viewer.load()
-            viewer.clamp()
+            if viewer.load():
+                viewer.clamp()
         else:
             return None
         return "dirty"
@@ -1231,8 +1246,8 @@ def main():
                 if now - last_check > 0.5:
                     last_check = now
                     if viewer.changed_on_disk():
-                        viewer.load()
-                        viewer.clamp()
+                        if viewer.load():
+                            viewer.clamp()
                         predicted = None
                         viewer.render()
                     elif shutil.get_terminal_size() != last_size:

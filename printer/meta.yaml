@@ -4,7 +4,7 @@
 # the words a document takes - horizontal, vertical, top, bottom, left,
 # right - and printer translates them for typst on the way out.
 papersize: a5
-fontsize: 10pt
+fontsize: 9.5pt
 linestretch: 1.15
 # book margins for a page this size, slightly more below so the page number
 # has room
